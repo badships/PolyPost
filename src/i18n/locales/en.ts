@@ -149,6 +149,12 @@ export const en = {
     'settings.customUrl.placeholder': 'https://api.example.com/v1',
     'settings.customKey.label': 'API Key',
     'settings.customKey.placeholder': 'sk-...',
+    'settings.modelPreset.label': 'Built-in Model Presets',
+    'settings.modelPreset.custom': 'Custom Model',
+    'settings.modelName.label': 'Model Name',
+    'settings.modelName.placeholder': 'e.g. gpt-4o-mini',
+    'settings.modelName.help':
+        'Choose a built-in OpenAI model or enter any compatible model ID manually.',
 
     // Prompt Settings
     'settings.prompts.title': 'Prompt Settings',

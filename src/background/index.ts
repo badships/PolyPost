@@ -1,5 +1,6 @@
 // Background service worker for PolyPost WebExtension (Chrome/Firefox/Safari)
 
+import { DEFAULT_SETTINGS } from '@/services/settingsDefaults';
 import { getActiveTab, getWebExt, openPolyPostWindow } from '@/services/webext';
 
 const webext = getWebExt();
@@ -107,17 +108,7 @@ webext?.runtime?.onInstalled?.addListener((details) => {
         console.log('PolyPost extension installed');
 
         // Initialize default settings
-        const defaultSettings = {
-            openaiApiKey: '',
-            provider: 'openai' as const,
-            customApiUrl: '',
-            customApiKey: '',
-            defaultLanguage: 'en' as const,
-            defaultPolishTemplate: 'professional',
-            theme: 'dark' as const,
-            uiLanguage: 'en' as const,
-            prompts: [],
-        };
+        const defaultSettings = DEFAULT_SETTINGS;
 
         const settingsKey = 'polypost_settings';
         const payload = {

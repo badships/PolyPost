@@ -118,6 +118,7 @@ export interface Settings {
     provider: 'openai' | 'custom';
     customApiUrl?: string;
     customApiKey?: string;
+    modelName: string;
     defaultLanguage: Language;
     defaultPolishTemplate: string; // Changed from PolishTemplate to string to support custom IDs
     theme: 'dark' | 'light' | 'system';

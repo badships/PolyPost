@@ -1,5 +1,6 @@
 import type { Post, Variant, Folder, Settings } from '@/types';
 import { getWebExt } from '@/services/webext';
+import { DEFAULT_SETTINGS, normalizeSettings } from '@/services/settingsDefaults';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -195,50 +196,25 @@ export const storage = {
         const settingsStorage = webext?.storage?.sync || webext?.storage?.local;
         if (settingsStorage) {
             const result = await settingsStorage.get(STORAGE_KEYS.SETTINGS);
-            return (
-                result[STORAGE_KEYS.SETTINGS] || {
-                    openaiApiKey: '',
-                    provider: 'openai',
-                    customApiUrl: '',
-                    customApiKey: '',
-                    defaultLanguage: 'en',
-                    defaultPolishTemplate: 'professional',
-                    theme: 'dark',
-                    uiLanguage: 'en',
-                    prompts: [],
-                }
-            );
+            return normalizeSettings(result[STORAGE_KEYS.SETTINGS]);
         }
 
-        // Fallback for web dev
-        const stored = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-        return stored
-            ? JSON.parse(stored)
-            : {
-                  openaiApiKey: '',
-                  provider: 'openai',
-                  customApiUrl: '',
-                  customApiKey: '',
-                  defaultLanguage: 'en',
-                  defaultPolishTemplate: 'professional',
-                  theme: 'dark',
-                  uiLanguage: 'en',
-                  prompts: [],
-              };
+        return normalizeSettings(readLocal<Partial<Settings> | null>(STORAGE_KEYS.SETTINGS, null));
     },
 
     async saveSettings(settings: Settings): Promise<void> {
         const webext = getWebExt();
         const settingsStorage = webext?.storage?.sync || webext?.storage?.local;
         if (settingsStorage) {
-            await settingsStorage.set({ [STORAGE_KEYS.SETTINGS]: settings });
+            await settingsStorage.set({ [STORAGE_KEYS.SETTINGS]: normalizeSettings(settings) });
             return;
         }
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+
+        writeLocal(STORAGE_KEYS.SETTINGS, normalizeSettings(settings));
     },
 
     async updateSettings(updates: Partial<Settings>): Promise<void> {
         const settings = await this.getSettings();
-        await this.saveSettings({ ...settings, ...updates });
+        await this.saveSettings({ ...DEFAULT_SETTINGS, ...settings, ...updates });
     },
 };

@@ -3,6 +3,8 @@ import type { Settings, Language, PolishPrompt } from '@/types';
 import { storage } from '@/services/storage';
 import { POLISH_PROMPTS, POLISH_TEMPLATE_DESCRIPTIONS } from '@/services/prompts';
 import { POLISH_TEMPLATE_NAMES } from '@/types';
+import { DEFAULT_SETTINGS } from '@/services/settingsDefaults';
+import { normalizeModelName } from '@/services/models';
 
 interface SettingsState extends Settings {
     isLoading: boolean;
@@ -13,6 +15,7 @@ interface SettingsState extends Settings {
     setProvider: (provider: 'openai' | 'custom') => Promise<void>;
     setCustomApiUrl: (url: string) => Promise<void>;
     setCustomApiKey: (key: string) => Promise<void>;
+    setModelName: (modelName: string) => Promise<void>;
     setDefaultLanguage: (language: Language) => Promise<void>;
     setDefaultPolishTemplate: (template: string) => Promise<void>;
     setTheme: (theme: 'dark' | 'light' | 'system') => Promise<void>;
@@ -42,6 +45,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     provider: 'openai',
     customApiUrl: '',
     customApiKey: '',
+    modelName: DEFAULT_SETTINGS.modelName,
     defaultLanguage: 'en',
     defaultPolishTemplate: 'professional',
     theme: 'dark',
@@ -90,6 +94,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     setCustomApiKey: async (key: string) => {
         await storage.updateSettings({ customApiKey: key });
         set({ customApiKey: key });
+    },
+
+    setModelName: async (modelName: string) => {
+        const normalizedModelName = normalizeModelName(modelName);
+        await storage.updateSettings({ modelName: normalizedModelName });
+        set({ modelName: normalizedModelName });
     },
 
     setDefaultLanguage: async (language: Language) => {

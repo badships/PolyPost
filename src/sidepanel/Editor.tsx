@@ -19,8 +19,15 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
     const { currentPostId, getPostById, updatePost, addVariant, selectVariant, deleteVariant } =
         usePostsStore();
     const variants = usePostsStore((s) => s.getVariantsByPostId(currentPostId || ''));
-    const { openaiApiKey, provider, customApiKey, customApiUrl, prompts, defaultLanguage } =
-        useSettingsStore();
+    const {
+        openaiApiKey,
+        provider,
+        customApiKey,
+        customApiUrl,
+        modelName,
+        prompts,
+        defaultLanguage,
+    } = useSettingsStore();
     const {
         isPolishModalOpen,
         isTranslateModalOpen,
@@ -220,7 +227,13 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
         setError(null);
 
         try {
-            const result = await aiService.polish(content, selectedPrompt.content, apiKey, baseURL);
+            const result = await aiService.polish(
+                content,
+                selectedPrompt.content,
+                apiKey,
+                modelName,
+                baseURL,
+            );
 
             const newVariant = await addVariant({
                 postId: currentPostId!,
@@ -306,6 +319,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
                     sourceContent,
                     targetLanguage,
                     apiKey!,
+                    modelName,
                     baseURL,
                 );
 

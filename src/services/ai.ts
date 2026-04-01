@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import type { Language } from '@/types';
 import { getTranslationPrompt, LANGUAGE_FULL_NAMES } from './prompts';
 import { proxyFetch } from './proxyFetch';
+import { normalizeModelName } from './models';
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -46,6 +47,7 @@ export class AIService {
         content: string,
         promptTemplate: string, // The actual prompt text, not just ID
         apiKey: string,
+        modelName?: string,
         baseURL?: string,
     ): Promise<AIResponse> {
         if (!apiKey) {
@@ -53,6 +55,7 @@ export class AIService {
         }
 
         const client = this.getClient(apiKey, baseURL);
+        const resolvedModelName = normalizeModelName(modelName);
 
         // Construct the full prompt
         let prompt: string;
@@ -73,7 +76,7 @@ Rewritten tweet:`;
 
         try {
             const response = await client.chat.completions.create({
-                model: 'gpt-4o-mini',
+                model: resolvedModelName,
                 messages: [
                     {
                         role: 'system',
@@ -112,6 +115,7 @@ Rewritten tweet:`;
         content: string,
         targetLanguage: Language,
         apiKey: string,
+        modelName?: string,
         baseURL?: string,
     ): Promise<AIResponse> {
         if (!apiKey) {
@@ -119,11 +123,12 @@ Rewritten tweet:`;
         }
 
         const client = this.getClient(apiKey, baseURL);
+        const resolvedModelName = normalizeModelName(modelName);
         const prompt = getTranslationPrompt(content, targetLanguage);
 
         try {
             const response = await client.chat.completions.create({
-                model: 'gpt-4o-mini',
+                model: resolvedModelName,
                 messages: [
                     {
                         role: 'system',

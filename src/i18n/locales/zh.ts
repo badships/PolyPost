@@ -147,6 +147,11 @@ export const zh = {
     'settings.customUrl.placeholder': 'https://api.example.com/v1',
     'settings.customKey.label': 'API 密钥',
     'settings.customKey.placeholder': 'sk-...',
+    'settings.modelPreset.label': '内置模型预设',
+    'settings.modelPreset.custom': '自定义模型',
+    'settings.modelName.label': '模型名称',
+    'settings.modelName.placeholder': '例如：gpt-4o-mini',
+    'settings.modelName.help': '可以先选择内置 OpenAI 模型，也可以手动输入任意兼容的模型 ID。',
 
     // Prompt Settings
     'settings.prompts.title': '提示词设置',

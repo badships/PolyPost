@@ -5,6 +5,12 @@ import { useSettingsStore } from '@/store';
 import type { Language } from '@/types';
 import { LANGUAGE_NAMES, POLISH_TEMPLATE_NAMES } from '@/types';
 import { useTranslation } from '@/hooks/useTranslation';
+import {
+    CUSTOM_MODEL_OPTION_VALUE,
+    OPENAI_MODEL_OPTIONS,
+    isBuiltInOpenAIModel,
+    normalizeModelName,
+} from '@/services/models';
 
 interface SettingsProps {
     onNavigateBack: () => void;
@@ -16,6 +22,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
         provider,
         customApiUrl,
         customApiKey,
+        modelName,
         defaultLanguage,
         defaultPolishTemplate,
         theme,
@@ -25,6 +32,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
         setProvider,
         setCustomApiUrl,
         setCustomApiKey,
+        setModelName,
         setDefaultLanguage,
         setDefaultPolishTemplate,
         setTheme,
@@ -41,6 +49,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
         openaiApiKey: openaiApiKey || '',
         customApiUrl: customApiUrl || '',
         customApiKey: customApiKey || '',
+        modelName: modelName || '',
     });
 
     const [isSaving, setIsSaving] = useState(false);
@@ -53,8 +62,9 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
             openaiApiKey: openaiApiKey || '',
             customApiUrl: customApiUrl || '',
             customApiKey: customApiKey || '',
+            modelName: modelName || '',
         });
-    }, [provider, openaiApiKey, customApiUrl, customApiKey]);
+    }, [provider, openaiApiKey, customApiUrl, customApiKey, modelName]);
 
     const handleSaveSettings = async () => {
         setIsSaving(true);
@@ -63,10 +73,15 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
             await setOpenaiApiKey(settings.openaiApiKey);
             await setCustomApiUrl(settings.customApiUrl);
             await setCustomApiKey(settings.customApiKey);
+            await setModelName(normalizeModelName(settings.modelName));
         } finally {
             setIsSaving(false);
         }
     };
+
+    const selectedModelPreset = isBuiltInOpenAIModel(settings.modelName.trim())
+        ? settings.modelName.trim()
+        : CUSTOM_MODEL_OPTION_VALUE;
 
     return (
         <div className="flex flex-col h-screen bg-bg-primary">
@@ -192,6 +207,56 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                                 </div>
                             </>
                         )}
+
+                        <div>
+                            <label className="block text-sm font-medium text-text-primary mb-2">
+                                {t('settings.modelPreset.label')}
+                            </label>
+                            <select
+                                value={selectedModelPreset}
+                                onChange={(e) =>
+                                    setSettings((current) => ({
+                                        ...current,
+                                        modelName:
+                                            e.target.value === CUSTOM_MODEL_OPTION_VALUE
+                                                ? isBuiltInOpenAIModel(current.modelName.trim())
+                                                    ? ''
+                                                    : current.modelName
+                                                : e.target.value,
+                                    }))
+                                }
+                                className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
+                            >
+                                {OPENAI_MODEL_OPTIONS.map((option) => (
+                                    <option key={option} value={option}>
+                                        {option}
+                                    </option>
+                                ))}
+                                <option value={CUSTOM_MODEL_OPTION_VALUE}>
+                                    {t('settings.modelPreset.custom')}
+                                </option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-text-primary mb-2">
+                                {t('settings.modelName.label')}
+                            </label>
+                            <Input
+                                type="text"
+                                value={settings.modelName}
+                                onChange={(e) =>
+                                    setSettings({
+                                        ...settings,
+                                        modelName: e.target.value,
+                                    })
+                                }
+                                placeholder={t('settings.modelName.placeholder')}
+                            />
+                            <p className="text-xs text-text-muted mt-2">
+                                {t('settings.modelName.help')}
+                            </p>
+                        </div>
 
                         <div className="flex justify-end pt-2">
                             <Button onClick={handleSaveSettings} isLoading={isSaving}>
