@@ -14,6 +14,7 @@
         "build:chrome": "POLYPOST_BROWSER=chrome npm run build:ext",
         "build:firefox": "POLYPOST_BROWSER=firefox npm run build:ext",
         "build:safari": "POLYPOST_BROWSER=safari npm run build:ext",
+        "pack:firefox": "npm run build:firefox && rm -f dist/polypost-firefox.xpi && (cd dist/firefox && zip -r -X ../polypost-firefox.xpi . -x '*.DS_Store' -x '__MACOSX/*' -x '*/__MACOSX/*' -x '*/._*' -x '*/.DS_Store' -x '.vite/*' -x '*/.vite/*')",
         "preview": "npm run preview:chrome",
         "preview:chrome": "POLYPOST_BROWSER=chrome vite preview",
         "preview:firefox": "POLYPOST_BROWSER=firefox vite preview",

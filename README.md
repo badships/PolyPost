@@ -91,6 +91,17 @@ For release builds, set your own ID with `POLYPOST_FIREFOX_ID`:
 POLYPOST_FIREFOX_ID=your-addon-id@example.com npm run build:firefox
 ```
 
+## Package for Firefox Add-ons (AMO upload)
+
+Use the packaging script to avoid missing-root-manifest and macOS hidden-file issues:
+
+```bash
+POLYPOST_FIREFOX_ID=your-addon-id@example.com npm run pack:firefox
+```
+
+Upload `dist/polypost-firefox.xpi` to AMO.
+The archive root contains `manifest.json` directly (not wrapped in an extra `firefox/` directory).
+
 ## Build for Safari
 
 Safari needs an Xcode project generated via Apple's converter.

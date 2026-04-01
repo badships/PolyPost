@@ -368,6 +368,23 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
         document.head.appendChild(style);
     };
 
+    const createFilterOption = (filter: string, label: string) => {
+        const option = document.createElement('label');
+        option.className = 'pp-option';
+        option.dataset.filter = filter;
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+
+        const text = document.createElement('span');
+        text.textContent = label;
+
+        option.appendChild(checkbox);
+        option.appendChild(text);
+
+        return { option, checkbox };
+    };
+
     const ensurePanel = () => {
         if (document.getElementById(PANEL_ID)) {
             return;
@@ -378,45 +395,54 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
         const panel = document.createElement('div');
         panel.id = PANEL_ID;
 
-        panel.innerHTML = `
-            <div class="pp-title">${panelCopy.title}</div>
-            <label class="pp-option" data-filter="fans">
-                <input type="checkbox" />
-                <span>${panelCopy.filters.fans}</span>
-            </label>
-            <label class="pp-option" data-filter="not-following">
-                <input type="checkbox" />
-                <span>${panelCopy.filters.notFollowing}</span>
-            </label>
-            <label class="pp-option" data-filter="verified">
-                <input type="checkbox" />
-                <span>${panelCopy.filters.verified}</span>
-            </label>
-            <label class="pp-option" data-filter="unverified">
-                <input type="checkbox" />
-                <span>${panelCopy.filters.unverified}</span>
-            </label>
-            <div class="pp-actions">
-                <button class="pp-button" data-action="apply">${panelCopy.actions.apply}</button>
-                <button class="pp-button secondary" data-action="reset">${panelCopy.actions.reset}</button>
-            </div>
-            <div class="pp-hint">${panelCopy.hint}</div>
-        `;
+        const title = document.createElement('div');
+        title.className = 'pp-title';
+        title.textContent = panelCopy.title;
+        panel.appendChild(title);
+
+        const fansOption = createFilterOption('fans', panelCopy.filters.fans);
+        const notFollowingOption = createFilterOption(
+            'not-following',
+            panelCopy.filters.notFollowing,
+        );
+        const verifiedOption = createFilterOption('verified', panelCopy.filters.verified);
+        const unverifiedOption = createFilterOption('unverified', panelCopy.filters.unverified);
+
+        panel.appendChild(fansOption.option);
+        panel.appendChild(notFollowingOption.option);
+        panel.appendChild(verifiedOption.option);
+        panel.appendChild(unverifiedOption.option);
+
+        const actions = document.createElement('div');
+        actions.className = 'pp-actions';
+
+        const applyButton = document.createElement('button');
+        applyButton.className = 'pp-button';
+        applyButton.dataset.action = 'apply';
+        applyButton.type = 'button';
+        applyButton.textContent = panelCopy.actions.apply;
+
+        const resetButton = document.createElement('button');
+        resetButton.className = 'pp-button secondary';
+        resetButton.dataset.action = 'reset';
+        resetButton.type = 'button';
+        resetButton.textContent = panelCopy.actions.reset;
+
+        actions.appendChild(applyButton);
+        actions.appendChild(resetButton);
+        panel.appendChild(actions);
+
+        const hint = document.createElement('div');
+        hint.className = 'pp-hint';
+        hint.textContent = panelCopy.hint;
+        panel.appendChild(hint);
 
         document.body.appendChild(panel);
 
-        const fansToggle = panel.querySelector<HTMLInputElement>('[data-filter="fans"] input');
-        const notFollowingToggle = panel.querySelector<HTMLInputElement>(
-            '[data-filter="not-following"] input',
-        );
-        const verifiedToggle = panel.querySelector<HTMLInputElement>(
-            '[data-filter="verified"] input',
-        );
-        const unverifiedToggle = panel.querySelector<HTMLInputElement>(
-            '[data-filter="unverified"] input',
-        );
-        const applyButton = panel.querySelector<HTMLButtonElement>('[data-action="apply"]');
-        const resetButton = panel.querySelector<HTMLButtonElement>('[data-action="reset"]');
+        const fansToggle = fansOption.checkbox;
+        const notFollowingToggle = notFollowingOption.checkbox;
+        const verifiedToggle = verifiedOption.checkbox;
+        const unverifiedToggle = unverifiedOption.checkbox;
 
         if (fansToggle) {
             fansToggle.checked = state.fansNotFollowed;
@@ -636,4 +662,3 @@ if (webext?.runtime?.onMessage?.addListener) {
 }
 
 export {};
-

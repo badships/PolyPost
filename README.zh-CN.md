@@ -91,6 +91,17 @@ npm run preview
 POLYPOST_FIREFOX_ID=your-addon-id@example.com npm run build:firefox
 ```
 
+## 打包并上传到 Firefox Add-ons（AMO）
+
+建议使用脚本打包，避免 `manifest.json` 不在压缩包根目录、以及 macOS 隐藏文件（`__MACOSX` / `._*`）问题：
+
+```bash
+POLYPOST_FIREFOX_ID=your-addon-id@example.com npm run pack:firefox
+```
+
+上传 `dist/polypost-firefox.xpi` 即可。
+该包根目录就是 `manifest.json`（不会额外套一层 `firefox/` 目录）。
+
 ## 如何构建 Safari 扩展
 
 Safari 需要通过 Apple 的 Converter 生成 Xcode 项目。

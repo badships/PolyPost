@@ -92,6 +92,60 @@ const addSafariFloatingHostResources = (manifest: any) => {
     });
 };
 
+const sanitizeFirefoxInnerHtmlAssignments = async (target: TargetBrowser) => {
+    if (target !== 'firefox') {
+        return;
+    }
+
+    const assetsDir = resolve(__dirname, `dist/${target}/assets`);
+    let assetNames: string[];
+    try {
+        assetNames = await fs.readdir(assetsDir);
+    } catch {
+        return;
+    }
+
+    const svgInnerHtmlPattern =
+        /([A-Za-z_$][\w$]*)\.innerHTML="<svg>"\+([A-Za-z_$][\w$]*)\.valueOf\(\)\.toString\(\)\+"<\/svg>",/g;
+    const dynamicInnerHtmlPattern = /([A-Za-z_$][\w$]*)\.innerHTML=([A-Za-z_$][\w$]*);/g;
+
+    for (const assetName of assetNames) {
+        if (!assetName.startsWith('globals-') || !assetName.endsWith('.js')) {
+            continue;
+        }
+
+        const assetPath = resolve(assetsDir, assetName);
+        let source: string;
+        try {
+            source = await fs.readFile(assetPath, 'utf8');
+        } catch {
+            continue;
+        }
+
+        if (!source.includes('.innerHTML=')) {
+            continue;
+        }
+
+        const withSvgReplaced = source.replace(
+            svgInnerHtmlPattern,
+            (_match: string, element: string, value: string) =>
+                `(()=>{while(${element}.firstChild){${element}.removeChild(${element}.firstChild)}${element}.appendChild((${element}.ownerDocument||document).createTextNode("<svg>"+${value}.valueOf().toString()+"</svg>"));})(),`,
+        );
+
+        const sanitizedSource = withSvgReplaced.replace(
+            dynamicInnerHtmlPattern,
+            (_match: string, element: string, value: string) =>
+                `(()=>{while(${element}.firstChild){${element}.removeChild(${element}.firstChild)}${element}.appendChild((${element}.ownerDocument||document).createTextNode(String(${value})));})();`,
+        );
+
+        if (sanitizedSource === source) {
+            continue;
+        }
+
+        await fs.writeFile(assetPath, sanitizedSource, 'utf8');
+    }
+};
+
 const sanitizeBuiltManifestPlugin = (target: TargetBrowser) => {
     return {
         name: 'polypost-sanitize-built-manifest',
@@ -129,10 +183,12 @@ const sanitizeBuiltManifestPlugin = (target: TargetBrowser) => {
             );
 
             if (!mutated) {
+                await sanitizeFirefoxInnerHtmlAssignments(target);
                 return;
             }
 
             await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+            await sanitizeFirefoxInnerHtmlAssignments(target);
         },
     };
 };
@@ -160,7 +216,23 @@ const buildManifest = () => {
             gecko: {
                 // This is required for signing. Replace with a real ID before publishing.
                 id: geckoId,
-                strict_min_version: '109.0',
+                // Keep minimum versions aligned with manifest keys used by Firefox:
+                // - background.type (Firefox 112+)
+                // - optional_host_permissions (Firefox 128+)
+                strict_min_version: '140.0',
+                data_collection_permissions: {
+                    required: [
+                        // API key is sent to provider endpoints for authentication.
+                        'authenticationInfo',
+                        // User post text can be sent to AI providers for polishing/translation.
+                        'personalCommunications',
+                        // Text sourced from website content can be sent to AI providers.
+                        'websiteContent',
+                    ],
+                },
+            },
+            gecko_android: {
+                strict_min_version: '142.0',
             },
         };
 
