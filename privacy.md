@@ -1,17 +1,17 @@
 # Privacy Policy for PolyPost
 
-**Last Updated:** February 3, 2026
+**Last Updated:** November 18, 2026
 
 ## Overview
 
-PolyPost ("we", "our", or "us") is a Chrome extension that helps you create and manage social media posts in a side panel, with optional AI-powered polishing and translation. We do not operate any backend server or multi-user system. Most functionality runs entirely in your browser, except for optional requests you initiate to third-party services (such as AI providers or Twitter/X web intents).
+PolyPost ("we", "our", or "us") is a cross-browser WebExtension (for Chrome, Firefox, and Safari) that helps you create and manage social media posts in a side panel, sidebar, or floating panel, with optional AI-powered polishing and translation. We do not operate any backend server or multi-user system. Most functionality runs entirely in your browser, except for optional requests you initiate to third-party services (such as AI providers or Twitter/X web intents).
 
 ## Data We Store Locally
 
-PolyPost stores your data on your device using Chrome storage:
+PolyPost stores your data on your device using browser extension storage:
 
-- **Content data**: posts, drafts, variants, and folder structures are saved in `chrome.storage.local`.
-- **Settings**: preferences such as default language, UI language, theme, prompts, provider selection, custom API URL, and API keys are saved in `chrome.storage.sync` (if Chrome sync is enabled) or locally.
+- **Content data**: posts, drafts, variants, and folder structures are saved in `storage.local`.
+- **Settings**: preferences such as default language, UI language, theme, prompts, provider selection, custom API URL, model name, and API keys are saved in `storage.sync` (when supported and enabled) with fallback to `storage.local`.
 
 We do not receive or store this data on our servers.
 
@@ -21,7 +21,7 @@ PolyPost only transmits data when you explicitly use certain features:
 
 1. **AI Features (OpenAI or compatible providers)**
     - When you click polish or translate, the selected content and relevant options are sent to the API endpoint you configure (OpenAI by default, or a compatible third-party provider).
-    - Your API key is stored locally in Chrome storage and is used only to authenticate requests directly to that provider.
+    - Your API key is stored locally in browser extension storage and is used only to authenticate requests directly to that provider.
     - We do not receive or store your content or API key.
     - Data is processed under the chosen provider's own data usage policy.
 
@@ -39,12 +39,12 @@ PolyPost only transmits data when you explicitly use certain features:
 PolyPost requests the minimum permissions required to function:
 
 - **`storage`**: Save your drafts, folders, variants, prompts, and settings locally.
-- **`sidePanel`**: Display the main interface in the browser side panel.
-- **`tabs`**: Read the active tab URL and open X pages when you use follower filter shortcuts.
-- **`scripting`**: Inject the follower filter panel into the current X/Twitter page when you click the inject button.
+- **`sidePanel`** (Chrome) / **`sidebar_action`** (Firefox): Display the main interface in the browser side panel or sidebar.
+- **`tabs`**: Read the active tab URL, communicate with X/Twitter content scripts, and open X pages when using follower filter shortcuts.
+- **Host permissions (`https://api.openai.com/*`, `https://x.com/*`, `https://*.x.com/*`, `https://twitter.com/*`, `https://*.twitter.com/*`) & content scripts**: Connect to the default OpenAI API endpoint and run the in-page follower filter panel (plus the floating panel host on Safari) on X/Twitter pages.
 - **Optional host permissions (`http://*/*`, `https://*/*`)**:
-    - Used only to allow connections to the AI API domain you configure (OpenAI by default, or a custom provider).
-    - Chrome will prompt you before granting access to a new domain.
+    - Used only when you configure a custom AI API endpoint domain.
+    - Your browser will prompt you before granting access to a new domain.
 
 ## No Central Server or Analytics
 
@@ -65,4 +65,4 @@ We may update this Privacy Policy from time to time. If changes are made, we wil
 
 ## Contact
 
-If you have questions about this Privacy Policy, please contact us at: [Your Contact Email]
+If you have questions about this Privacy Policy, please open an issue on GitHub: https://github.com/badships/PolyPost/issues

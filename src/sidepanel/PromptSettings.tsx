@@ -224,7 +224,7 @@ export const PromptSettings: React.FC = () => {
     };
 
     const handleDelete = async (id: string) => {
-        if (confirm('Are you sure you want to delete this prompt?')) {
+        if (confirm(t('settings.prompts.delete_confirm'))) {
             try {
                 await deletePrompt(id);
             } catch (err) {
@@ -335,9 +335,8 @@ export const PromptSettings: React.FC = () => {
                                         size={14}
                                         className="text-text-muted cursor-help"
                                     />
-                                    <div className="absolute right-0 w-64 p-2 bg-popover rounded shadow-lg border border-border-primary text-xs text-text-secondary invisible group-hover:visible z-10">
-                                        Use <code>{'{content}'}</code> as a placeholder for the
-                                        user's input text.
+                                    <div className="absolute right-0 w-64 p-2 bg-bg-secondary rounded shadow-lg border border-border-primary text-xs text-text-secondary invisible group-hover:visible z-10">
+                                        {t('settings.prompts.form.placeholder_hint')}
                                     </div>
                                 </div>
                             </div>

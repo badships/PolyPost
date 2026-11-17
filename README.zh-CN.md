@@ -9,23 +9,30 @@ PolyPost 是一个基于 WebExtension（Manifest V3）的浏览器扩展，帮�
 
 - 生成 / 润色 / 翻译社媒内容（多语言）
 - 主应用界面（Dashboard / Editor / Settings）
+- 自定义润色提示词模板（Prompts）与模型选择（内置 `gpt-5.4-mini` 等预设或自定义模型 ID）
+- 快速翻译工具（Quick Translate），用于临时翻译回复且不创建草稿/帖子
+- X/Twitter 粉丝与关注列表页内过滤（Follower Filter），支持 `/followers`、`/verified_followers`、`/following` 页面（互关/未回关/认证状态筛选）
+- 中英双语界面切换与浅色 / 深色 / 跟随系统主题
 - 按浏览器提供原生入口体验：
-  - Chrome：Popup 入口 + side panel 支持
-  - Firefox：点击扩展图标直接打开原生侧栏（`sidebar_action`）
-  - Safari：点击扩展图标在 X/Twitter 页面显示/隐藏悬浮面板
+    - Chrome：点击扩展图标直接打开原生侧边栏（`sidePanel`）
+    - Firefox：点击扩展图标直接打开原生侧栏（`sidebar_action`）
+    - Safari：点击扩展图标在 X/Twitter 页面显示/隐藏悬浮面板
 - Safari 悬浮面板支持拖拽调宽；若页面嵌入受限会自动回退到独立小窗
 - 支持 OpenAI 及兼容 OpenAI 的第三方服务
 
 ## 项目结构
 
-- `src/background/`：Service Worker 入口
-- `src/popup/`：弹窗 UI
-- `src/sidepanel/`：主应用 UI
-- `src/components/`：共享组件
-- `src/services/`：OpenAI / Storage / Prompt helpers
-- `src/store/`：Zustand 状态切片
-- `src/styles/`：Tailwind + 全局样式
-- `public/`：静态资源
+- `src/background/`：Service Worker / 后台脚本入口
+- `src/popup/`：Chrome 弹窗 UI
+- `src/sidepanel/`：主应用 UI（Dashboard、Editor、Settings、Prompts、Quick Translate、Follower Filter）
+- `src/content/`：X/Twitter 内容脚本（`followersFilter.ts`、`floatingAppHost.ts`）
+- `src/components/`：共享 UI、布局、内容库与编辑器组件
+- `src/services/`：OpenAI、WebExtension 存储、权限检查、代理请求、提示词与 Twitter Web Intent 工具
+- `src/store/`：Zustand 状态切片（`postsStore`、`foldersStore`、`settingsStore`、`uiStore`）
+- `src/hooks/` 与 `src/i18n/`：类型化翻译 Hook 与 `en` / `zh` 语言字典
+- `src/types/` 与 `src/utils/`：TypeScript 类型定义、通用工具与开发 Mock 数据初始化
+- `src/styles/`：Tailwind + 全局主题样式
+- `public/`：静态资源（`icons/`）
 
 ## 开发与构建
 
@@ -67,6 +74,17 @@ npm run build:safari   # dist/safari（给 Safari Converter 的 WebExtension 目
 
 ```bash
 npm run preview
+npm run preview:chrome
+npm run preview:firefox
+npm run preview:safari
+```
+
+代码检查与格式化：
+
+```bash
+npm run lint
+npm run format
+npm run format:check
 ```
 
 ## 如何在 Chrome 中加载
@@ -115,17 +133,17 @@ xcrun safari-web-extension-converter dist/safari
 
 3. 用 Xcode 打开生成的项目，先运行一次 App target（`⌘R`）
 4. 在 Safari 中：
-   - 开启开发者菜单（`Settings > Advanced`）
-   - 开启 `Develop > Allow Unsigned Extensions`
-   - 在 `Settings > Extensions` 启用该扩展
+    - 开启开发者菜单（`Settings > Advanced`）
+    - 开启 `Develop > Allow Unsigned Extensions`
+    - 在 `Settings > Extensions` 启用该扩展
 5. 打开 `x.com` 或 `twitter.com`，点击扩展图标：
-   - 第一次点击显示悬浮面板
-   - 再点一次隐藏悬浮面板
-   - 拖拽面板左边缘可调整宽度
+    - 第一次点击显示悬浮面板
+    - 再点一次隐藏悬浮面板
+    - 拖拽面板左边缘可调整宽度
 
 ## 配置与安全
 
-- API Key 仅通过设置页输入并存储在 Chrome Storage 中，请勿硬编码
+- API Key 仅通过设置页输入并存储在浏览器扩展本地存储（Extension Storage）中，请勿硬编码
 - 如需新增权限，请同步更新 `manifest.json` 并说明用途
 
 ## 贡献

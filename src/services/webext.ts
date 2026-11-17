@@ -42,7 +42,9 @@ export const openPolyPost = async (tabId?: number): Promise<void> => {
         return;
     }
 
-    const sidePanel = (webext as any).sidePanel as { open?: (options: any) => Promise<void> } | undefined;
+    const sidePanel = (webext as any).sidePanel as
+        | { open?: (options: any) => Promise<void> }
+        | undefined;
     if (sidePanel?.open && typeof tabId === 'number') {
         try {
             await sidePanel.open({ tabId });

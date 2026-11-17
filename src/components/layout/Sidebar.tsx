@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+    CalendarClock,
     CheckCircle,
     FileText,
     FileClock,
@@ -37,17 +38,25 @@ export const Sidebar: React.FC = () => {
     const libraryItems: { id: LibraryFilter; label: string; icon: React.ReactNode }[] = [
         { id: 'all', label: t('dashboard.title.all'), icon: <FileText size={18} /> },
         { id: 'drafts', label: t('dashboard.title.drafts'), icon: <FileClock size={18} /> },
+        {
+            id: 'scheduled',
+            label: t('dashboard.title.scheduled'),
+            icon: <CalendarClock size={18} />,
+        },
         { id: 'posted', label: t('dashboard.title.posted'), icon: <CheckCircle size={18} /> },
     ];
 
     // Count posts by status
     const draftCount = posts.filter((p) => p.status === 'draft').length;
+    const scheduledCount = posts.filter((p) => p.status === 'scheduled').length;
     const postedCount = posts.filter((p) => p.status === 'posted').length;
 
     const getCount = (id: LibraryFilter) => {
         switch (id) {
             case 'drafts':
                 return draftCount;
+            case 'scheduled':
+                return scheduledCount;
             case 'posted':
                 return postedCount;
             default:
@@ -89,7 +98,7 @@ export const Sidebar: React.FC = () => {
                   justify-center sm:justify-start gap-0 sm:gap-3
                   transition-colors duration-150
                   ${
-                      libraryFilter === item.id && !selectedFolderId
+                      dashboardView === 'posts' && libraryFilter === item.id && !selectedFolderId
                           ? 'bg-bg-tertiary text-text-primary'
                           : 'text-text-secondary hover:bg-bg-secondary hover:text-text-primary'
                   }

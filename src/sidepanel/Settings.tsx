@@ -28,11 +28,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
         theme,
         uiLanguage,
         prompts,
-        setOpenaiApiKey,
-        setProvider,
-        setCustomApiUrl,
-        setCustomApiKey,
-        setModelName,
+        updateSettings,
         setDefaultLanguage,
         setDefaultPolishTemplate,
         setTheme,
@@ -69,11 +65,15 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
     const handleSaveSettings = async () => {
         setIsSaving(true);
         try {
-            await setProvider(settings.provider);
-            await setOpenaiApiKey(settings.openaiApiKey);
-            await setCustomApiUrl(settings.customApiUrl);
-            await setCustomApiKey(settings.customApiKey);
-            await setModelName(normalizeModelName(settings.modelName));
+            const normalizedModelName = normalizeModelName(settings.modelName);
+            await updateSettings({
+                provider: settings.provider,
+                openaiApiKey: settings.openaiApiKey,
+                customApiUrl: settings.customApiUrl,
+                customApiKey: settings.customApiKey,
+                modelName: normalizedModelName,
+            });
+            setSettings((current) => ({ ...current, modelName: normalizedModelName }));
         } finally {
             setIsSaving(false);
         }

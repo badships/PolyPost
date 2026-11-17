@@ -39,6 +39,9 @@ const isFollowersFilterMessage = (message: unknown): message is FollowersFilterM
 const injectFollowersFilter = (copy?: PanelCopy) => {
     const win = window as any;
     if (win.__polypostXFilterInitialized) {
+        if (copy && typeof win.__polypostXFilterUpdateCopy === 'function') {
+            win.__polypostXFilterUpdateCopy(copy);
+        }
         if (typeof win.__polypostXFilterApply === 'function') {
             win.__polypostXFilterApply();
         }
@@ -126,27 +129,17 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
             return byPartialTestId;
         }
 
-        const searchScopes = [cell, cell.parentElement, cell.parentElement?.parentElement].filter(
-            Boolean,
-        ) as HTMLElement[];
+        const candidates = Array.from(
+            cell.querySelectorAll<HTMLElement>('div[role="button"], button'),
+        );
+        const match = candidates.find((el) => {
+            const label = normalizeText(
+                el.getAttribute('aria-label') || el.textContent,
+            ).toLowerCase();
+            return matchesLabel(label, labels.following) || matchesLabel(label, labels.follow);
+        });
 
-        for (const scope of searchScopes) {
-            const candidates = Array.from(
-                scope.querySelectorAll<HTMLElement>('div[role="button"], button'),
-            );
-            const match = candidates.find((el) => {
-                const label = normalizeText(
-                    el.getAttribute('aria-label') || el.textContent,
-                ).toLowerCase();
-                return matchesLabel(label, labels.following) || matchesLabel(label, labels.follow);
-            });
-
-            if (match) {
-                return match;
-            }
-        }
-
-        return null;
+        return match || null;
     };
 
     const isFollowing = (cell: HTMLElement) => {
@@ -189,33 +182,28 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
     };
 
     const followsYou = (cell: HTMLElement) => {
-        const socialContext = cell.querySelector<HTMLElement>('[data-testid="socialContext"]');
-        if (socialContext) {
-            const text = normalizeText(socialContext.textContent).toLowerCase();
+        const indicator =
+            cell.querySelector<HTMLElement>('[data-testid="userFollowIndicator"]') ||
+            cell.querySelector<HTMLElement>('[data-testid="socialContext"]');
+        if (indicator) {
+            const text = normalizeText(indicator.textContent).toLowerCase();
             if (matchesLabel(text, labels.followsYou)) {
                 return true;
             }
         }
 
         const ariaLabelMatch = cell.querySelector<HTMLElement>(
-            '[aria-label*="Follows you"], [aria-label*="关注了你"], [aria-label*="关注你"]',
+            '[aria-label*="Follows you" i], [aria-label*="关注了你"], [aria-label*="关注你"]',
         );
         if (ariaLabelMatch) {
             return true;
         }
 
         const spans = Array.from(cell.querySelectorAll('span'));
-        const hasLabel = spans.some((span) => {
+        return spans.some((span) => {
             const text = normalizeText(span.textContent).toLowerCase();
-            return matchesLabel(text, labels.followsYou);
+            return labels.followsYou.includes(text);
         });
-
-        if (hasLabel) {
-            return true;
-        }
-
-        const cellText = normalizeText(cell.textContent).toLowerCase();
-        return matchesLabel(cellText, labels.followsYou) ? true : false;
     };
 
     const shouldHide = (cell: HTMLElement, listType: string) => {
@@ -602,19 +590,78 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
         }
     }, 800);
 
+    const updatePanelCopy = (nextCopy: PanelCopy) => {
+        const panel = document.getElementById(PANEL_ID);
+        if (!panel) {
+            return;
+        }
+
+        const titleEl = panel.querySelector<HTMLElement>('.pp-title');
+        if (titleEl) {
+            titleEl.textContent = nextCopy.title;
+        }
+
+        const fansLabel = panel.querySelector<HTMLElement>('[data-filter="fans"] span');
+        if (fansLabel) {
+            fansLabel.textContent = nextCopy.filters.fans;
+        }
+
+        const notFollowingLabel = panel.querySelector<HTMLElement>(
+            '[data-filter="not-following"] span',
+        );
+        if (notFollowingLabel) {
+            notFollowingLabel.textContent = nextCopy.filters.notFollowing;
+        }
+
+        const verifiedLabel = panel.querySelector<HTMLElement>('[data-filter="verified"] span');
+        if (verifiedLabel) {
+            verifiedLabel.textContent = nextCopy.filters.verified;
+        }
+
+        const unverifiedLabel = panel.querySelector<HTMLElement>('[data-filter="unverified"] span');
+        if (unverifiedLabel) {
+            unverifiedLabel.textContent = nextCopy.filters.unverified;
+        }
+
+        const applyBtn = panel.querySelector<HTMLElement>('[data-action="apply"]');
+        if (applyBtn) {
+            applyBtn.textContent = nextCopy.actions.apply;
+        }
+
+        const resetBtn = panel.querySelector<HTMLElement>('[data-action="reset"]');
+        if (resetBtn) {
+            resetBtn.textContent = nextCopy.actions.reset;
+        }
+
+        const hintEl = panel.querySelector<HTMLElement>('.pp-hint');
+        if (hintEl) {
+            hintEl.textContent = nextCopy.hint;
+        }
+    };
+
     const cleanup = () => {
         observer.disconnect();
         window.clearInterval(routeInterval);
+        if (pendingTimer !== null) {
+            window.clearTimeout(pendingTimer);
+            pendingTimer = null;
+        }
+        pendingCells.clear();
+        getUserCells().forEach((cell) => {
+            cell.style.display = '';
+        });
         document.getElementById(PANEL_ID)?.remove();
         document.getElementById(STYLE_ID)?.remove();
         delete win.__polypostXFilterInitialized;
         delete win.__polypostXFilterApply;
+        delete win.__polypostXFilterUpdateCopy;
         delete win.__polypostXFilterCleanup;
         delete win.__polypostXFilterLastUrl;
     };
 
     win.__polypostXFilterInitialized = true;
     win.__polypostXFilterApply = scheduleApplyFull;
+    win.__polypostXFilterUpdateCopy = updatePanelCopy;
     win.__polypostXFilterCleanup = cleanup;
     win.__polypostXFilterLastUrl = window.location.href;
 

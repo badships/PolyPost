@@ -3,6 +3,8 @@ import type { Folder } from '@/types';
 import { storage } from '@/services/storage';
 import { generateId } from '@/utils';
 import { FOLDER_COLORS } from '@/types';
+import { usePostsStore } from './postsStore';
+import { useUIStore } from './uiStore';
 
 interface FoldersState {
     folders: Folder[];
@@ -65,6 +67,14 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
         set((state) => ({
             folders: state.folders.filter((f) => f.id !== id),
         }));
+        usePostsStore.setState((state) => ({
+            posts: state.posts.map((p) =>
+                p.folderId === id ? { ...p, folderId: null, updatedAt: Date.now() } : p,
+            ),
+        }));
+        if (useUIStore.getState().selectedFolderId === id) {
+            useUIStore.getState().setSelectedFolderId(null);
+        }
     },
 
     getFolderById: (id: string) => {

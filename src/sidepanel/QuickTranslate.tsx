@@ -9,7 +9,7 @@ import { LANGUAGE_NAMES } from '@/types';
 
 export const QuickTranslate: React.FC = () => {
     const { t } = useTranslation();
-    const { defaultLanguage, openaiApiKey, provider, customApiKey, customApiUrl } =
+    const { defaultLanguage, openaiApiKey, provider, customApiKey, customApiUrl, modelName } =
         useSettingsStore();
 
     const [sourceText, setSourceText] = useState('');
@@ -62,7 +62,13 @@ export const QuickTranslate: React.FC = () => {
         setError(null);
 
         try {
-            const result = await aiService.translate(sourceText, targetLanguage, apiKey, baseURL);
+            const result = await aiService.translate(
+                sourceText,
+                targetLanguage,
+                apiKey,
+                modelName,
+                baseURL,
+            );
             setTranslatedText(result.content);
         } catch (err) {
             setError(err instanceof Error ? err.message : t('editor.translate_fail'));

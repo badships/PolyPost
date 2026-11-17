@@ -37,8 +37,11 @@ export const usePostsStore = create<PostsState>((set, get) => ({
     loadPosts: async () => {
         set({ isLoading: true });
         try {
-            const posts = await storage.getPosts();
-            set({ posts, isLoading: false });
+            const [posts, variants] = await Promise.all([
+                storage.getPosts(),
+                storage.getVariants(),
+            ]);
+            set({ posts, variants, isLoading: false });
         } catch (error) {
             console.error('Failed to load posts:', error);
             set({ isLoading: false });

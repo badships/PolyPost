@@ -11,6 +11,7 @@ interface SettingsState extends Settings {
 
     // Actions
     loadSettings: () => Promise<void>;
+    updateSettings: (updates: Partial<Settings>) => Promise<void>;
     setOpenaiApiKey: (key: string) => Promise<void>;
     setProvider: (provider: 'openai' | 'custom') => Promise<void>;
     setCustomApiUrl: (url: string) => Promise<void>;
@@ -58,22 +59,48 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         try {
             const settings = await storage.getSettings();
 
-            // Initialize prompts if they don't exist in storage
             let prompts = settings.prompts;
+            let shouldPersist = false;
             if (!prompts || prompts.length === 0) {
                 prompts = getDefaultPrompts();
-                // We should probably save these defaults to storage immediately so they persist?
-                // Alternatively, component logic decides. Let's save them to ensure consistency.
-                // However, we don't want to overwrite if the user actually deleted everything (but logic prevents that).
-                // So if it's undefined/null, we set defaults.
+                shouldPersist = true;
             }
 
-            set({ ...settings, prompts, isLoading: false });
+            const hasValidDefault = prompts.some((p) => p.id === settings.defaultPolishTemplate);
+            const defaultPolishTemplate = hasValidDefault
+                ? settings.defaultPolishTemplate
+                : prompts[0]?.id || 'professional';
+            if (defaultPolishTemplate !== settings.defaultPolishTemplate) {
+                shouldPersist = true;
+            }
+
+            const resolvedSettings = {
+                ...settings,
+                prompts,
+                defaultPolishTemplate,
+            };
+
+            if (shouldPersist) {
+                await storage.saveSettings(resolvedSettings);
+            }
+
+            set({ ...resolvedSettings, isLoading: false });
         } catch (error) {
             console.error('Failed to load settings:', error);
             // Fallback to defaults
             set({ prompts: getDefaultPrompts(), isLoading: false });
         }
+    },
+
+    updateSettings: async (updates: Partial<Settings>) => {
+        const normalizedUpdates: Partial<Settings> = {
+            ...updates,
+            ...(updates.modelName !== undefined
+                ? { modelName: normalizeModelName(updates.modelName) }
+                : {}),
+        };
+        await storage.updateSettings(normalizedUpdates);
+        set(normalizedUpdates);
     },
 
     setOpenaiApiKey: async (key: string) => {
@@ -141,13 +168,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     },
 
     deletePrompt: async (id: string) => {
-        const { prompts } = get();
+        const { prompts, defaultPolishTemplate } = get();
         if (prompts.length <= 1) {
             throw new Error('Cannot delete the last prompt');
         }
         const newPrompts = prompts.filter((p) => p.id !== id);
-        set({ prompts: newPrompts });
-        await storage.updateSettings({ prompts: newPrompts });
+        const nextDefaultTemplate =
+            defaultPolishTemplate === id
+                ? newPrompts[0]?.id || 'professional'
+                : defaultPolishTemplate;
+        set({ prompts: newPrompts, defaultPolishTemplate: nextDefaultTemplate });
+        await storage.updateSettings({
+            prompts: newPrompts,
+            defaultPolishTemplate: nextDefaultTemplate,
+        });
     },
 
     resetPrompts: async () => {

@@ -52,34 +52,6 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
     const contentRef = useRef(content);
     const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
 
-    // Fix: Redefine getAiSettings to use explicit checks inside handlers or just simple strings if not added to locale
-    // The previous implementation returned an object with errorMsg.
-    // I haven't added keys for "Please configure your OpenAI API key in Settings".
-    // I should probably add them or just use a generic 'editor.save_error' which is "Please enter some content..." - NOT GOOD.
-
-    // Let's stick to the plan: "Replace hardcoded strings".
-    // I missed these specific error messages in my `replace_file_content` for locales.
-    // I will use a fallback string or just keep them hardcoded if I missed them?
-    // No, I should fix it. CONSTANTS?
-    // Actually, let's look at `en.ts` again.
-    // I added `editor.save_error`.
-
-    // Let's modify `getAiSettings` logic slightly or just use hardcoded strings wrapped in t() if I added them.
-    // I didn't add them. I will add them in a separate step or just use `editor.polish_fail` style.
-
-    // Let's use 'settings.apikey.help' for now ? No.
-    // I'll leave the errorMsg logic inline in handlePolish/handleTranslate to be cleaner and use newly added keys if possible?
-    // I'll use `t('settings.ai.title')` + " missing" ?
-
-    // Let's RE-READ `en.ts` content I wrote.
-    // I wrote keys for `editor.save_error`, `editor.polish_error`, etc.
-    // But not for "Please configure your OpenAI API key".
-
-    // I will use hardcoded strings for now for these specific configuration errors to avoid breaking flow,
-    // OR BETTER: I will add them to the locales in a quick follow up or just use a generic "AI Configuration Error".
-
-    // Let's proceed with replacing the main UI elements first.
-
     // Get selected variant content (if any)
     const selectedVariant = variants.find((v) => v.isSelected);
     const contentToPublish = selectedVariant?.content || content;
@@ -117,8 +89,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
     // Save on unmount or when switching posts
     useEffect(() => {
         return () => {
-            if (hasUnsavedChangesRef.current && currentPostId && contentRef.current) {
-                updatePost(currentPostId, { sourceContent: contentRef.current });
+            if (hasUnsavedChangesRef.current && currentPostId) {
+                void updatePost(currentPostId, { sourceContent: contentRef.current });
             }
         };
     }, [currentPostId, updatePost]);

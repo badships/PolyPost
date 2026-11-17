@@ -6,7 +6,12 @@ import { resolve } from 'path';
 import baseManifest from './manifest.json';
 
 type TargetBrowser = 'chrome' | 'firefox' | 'safari';
-const X_MATCHES = ['https://x.com/*', 'https://*.x.com/*', 'https://twitter.com/*', 'https://*.twitter.com/*'];
+const X_MATCHES = [
+    'https://x.com/*',
+    'https://*.x.com/*',
+    'https://twitter.com/*',
+    'https://*.twitter.com/*',
+];
 
 const getTargetBrowser = (): TargetBrowser => {
     const candidate = (process.env.POLYPOST_BROWSER || process.env.TARGET_BROWSER || '')
@@ -20,7 +25,7 @@ const getTargetBrowser = (): TargetBrowser => {
     return 'chrome';
 };
 
-const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const getBackgroundForTarget = (target: TargetBrowser, manifest: any) => {
     const background = manifest?.background || {};

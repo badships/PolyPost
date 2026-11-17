@@ -6,6 +6,7 @@ import type { Post, Variant } from '@/types';
 import { useUIStore, useFoldersStore, usePostsStore } from '@/store';
 import { truncateText, formatRelativeTime } from '@/utils';
 import { LANGUAGE_CODES } from '@/types';
+import { useTranslation } from '@/hooks/useTranslation';
 
 interface PostGridProps {
     posts: Post[];
@@ -24,11 +25,18 @@ const PostListItem: React.FC<{
     const [showMoveModal, setShowMoveModal] = useState(false);
     const { folders } = useFoldersStore();
     const { updatePost, deletePost } = usePostsStore();
+    const { t, language } = useTranslation();
 
     const languages = [...new Set(variants.filter((v) => v.language).map((v) => v.language!))]
         .map((lang) => LANGUAGE_CODES[lang])
         .slice(0, 2);
     const currentFolder = folders.find((f) => f.id === post.folderId);
+
+    const statusLabels = {
+        draft: t('post.status.draft'),
+        scheduled: t('post.status.scheduled'),
+        posted: t('post.status.posted'),
+    };
 
     const handleMoveToFolder = async (folderId: string | null) => {
         await updatePost(post.id, { folderId });
@@ -37,7 +45,7 @@ const PostListItem: React.FC<{
     };
 
     const handleDelete = async () => {
-        if (confirm('Are you sure you want to delete this post?')) {
+        if (confirm(t('post.delete_confirm'))) {
             await deletePost(post.id);
         }
         setShowMenu(false);
@@ -52,7 +60,7 @@ const PostListItem: React.FC<{
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                     <p className="text-text-primary text-sm truncate">
-                        {truncateText(post.sourceContent, 80) || 'Empty post...'}
+                        {truncateText(post.sourceContent, 80) || t('post.empty')}
                     </p>
                     <div className="flex items-center gap-1 mt-1">
                         {languages.map((lang) => (
@@ -74,7 +82,7 @@ const PostListItem: React.FC<{
                                   : 'scheduled'
                         }
                     >
-                        {post.status}
+                        {statusLabels[post.status]}
                     </Badge>
                 </div>
 
@@ -95,7 +103,7 @@ const PostListItem: React.FC<{
 
                 {/* Updated */}
                 <div className="w-24 text-xs text-text-muted">
-                    {formatRelativeTime(post.updatedAt)}
+                    {formatRelativeTime(post.updatedAt, language)}
                 </div>
 
                 {/* Actions */}
@@ -124,14 +132,14 @@ const PostListItem: React.FC<{
                                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-tertiary"
                             >
                                 <FolderInput size={14} />
-                                Move to folder
+                                {t('post.move_to_folder')}
                             </button>
                             <button
                                 onClick={handleDelete}
                                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-bg-tertiary"
                             >
                                 <Trash2 size={14} />
-                                Delete
+                                {t('actions.delete')}
                             </button>
                         </div>
                     )}
@@ -142,7 +150,7 @@ const PostListItem: React.FC<{
             <Modal
                 isOpen={showMoveModal}
                 onClose={() => setShowMoveModal(false)}
-                title="Move to Folder"
+                title={t('post.move_modal.title')}
                 size="sm"
             >
                 <div className="space-y-2">
@@ -151,7 +159,7 @@ const PostListItem: React.FC<{
                         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-left
               ${!post.folderId ? 'bg-accent/10 text-accent' : 'text-text-primary hover:bg-bg-tertiary'}`}
                     >
-                        No folder
+                        {t('post.no_folder')}
                     </button>
                     {folders.map((folder) => (
                         <button
@@ -170,7 +178,7 @@ const PostListItem: React.FC<{
                 </div>
                 <div className="flex justify-end mt-4">
                     <Button variant="ghost" onClick={() => setShowMoveModal(false)}>
-                        Cancel
+                        {t('actions.cancel')}
                     </Button>
                 </div>
             </Modal>
@@ -185,6 +193,7 @@ export const PostGrid: React.FC<PostGridProps> = ({
     onCreateNew,
 }) => {
     const { viewMode } = useUIStore();
+    const { t } = useTranslation();
 
     const getVariantsForPost = (postId: string) => {
         return variants.filter((v) => v.postId === postId);
@@ -216,7 +225,7 @@ export const PostGrid: React.FC<PostGridProps> = ({
                     <div className="w-12 h-12 rounded-full bg-bg-tertiary flex items-center justify-center">
                         <Plus size={24} />
                     </div>
-                    <span className="text-sm">Create new post</span>
+                    <span className="text-sm">{t('nav.new_post')}</span>
                 </button>
             </div>
         );
@@ -227,10 +236,10 @@ export const PostGrid: React.FC<PostGridProps> = ({
         <div className="flex flex-col gap-2">
             {/* List header */}
             <div className="flex items-center gap-4 px-4 py-2 text-xs text-text-muted font-medium uppercase">
-                <div className="flex-1">Content</div>
-                <div className="w-20">Status</div>
-                <div className="w-24">Folder</div>
-                <div className="w-24">Updated</div>
+                <div className="flex-1">{t('post.list.content')}</div>
+                <div className="w-20">{t('post.list.status')}</div>
+                <div className="w-24">{t('post.list.folder')}</div>
+                <div className="w-24">{t('post.list.updated')}</div>
                 <div className="w-8"></div>
             </div>
 
@@ -249,7 +258,7 @@ export const PostGrid: React.FC<PostGridProps> = ({
                 className="flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-border-primary rounded-lg text-text-muted hover:text-text-primary hover:border-accent transition-colors"
             >
                 <Plus size={18} />
-                <span className="text-sm">Create new post</span>
+                <span className="text-sm">{t('nav.new_post')}</span>
             </button>
         </div>
     );

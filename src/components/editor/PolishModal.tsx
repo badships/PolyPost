@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Button } from '@/components/ui';
 import { useSettingsStore } from '@/store';
 import { Sparkles, Briefcase, Flame, Coffee, Cpu, Smile, Zap, PenTool } from 'lucide-react';
@@ -44,6 +44,16 @@ export const PolishModal: React.FC<PolishModalProps> = ({
     const [selectedTemplateId, setSelectedTemplateId] = useState<string>(
         defaultPolishTemplate || 'professional',
     );
+
+    useEffect(() => {
+        if (!isOpen) return;
+        const hasDefault = prompts.some((p) => p.id === defaultPolishTemplate);
+        if (hasDefault) {
+            setSelectedTemplateId(defaultPolishTemplate);
+        } else if (prompts.length > 0) {
+            setSelectedTemplateId(prompts[0].id);
+        }
+    }, [isOpen, defaultPolishTemplate, prompts]);
 
     const handlePolish = () => {
         onPolish(selectedTemplateId);
