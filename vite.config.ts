@@ -207,6 +207,13 @@ const buildManifest = (command: 'build' | 'serve' = 'build') => {
 
     manifest.background = getBackgroundForTarget(target, manifest);
 
+    if (command === 'serve') {
+        manifest.content_security_policy = {
+            extension_pages:
+                "script-src 'self' http://localhost:5173; object-src 'self'; connect-src 'self' http://localhost:5173 ws://localhost:5173 https: http:;",
+        };
+    }
+
     if (target !== 'chrome') {
         delete manifest.side_panel;
         manifest.options_ui = {

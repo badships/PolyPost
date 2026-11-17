@@ -1,9 +1,7 @@
 import { create } from 'zustand';
 import type { Settings, Language, PolishPrompt } from '@/types';
 import { storage } from '@/services/storage';
-import { POLISH_PROMPTS, POLISH_TEMPLATE_DESCRIPTIONS } from '@/services/prompts';
-import { POLISH_TEMPLATE_NAMES } from '@/types';
-import { DEFAULT_SETTINGS } from '@/services/settingsDefaults';
+import { buildDefaultPrompts, DEFAULT_SETTINGS } from '@/services/settingsDefaults';
 import { normalizeModelName } from '@/services/models';
 
 interface SettingsState extends Settings {
@@ -29,18 +27,6 @@ interface SettingsState extends Settings {
     resetPrompts: () => Promise<void>;
 }
 
-// Helper to generate default prompts from constants
-const getDefaultPrompts = (): PolishPrompt[] => {
-    return Object.entries(POLISH_PROMPTS).map(([key, content]) => ({
-        id: key,
-        template: key,
-        name: POLISH_TEMPLATE_NAMES[key as keyof typeof POLISH_TEMPLATE_NAMES] || key,
-        description:
-            POLISH_TEMPLATE_DESCRIPTIONS[key as keyof typeof POLISH_TEMPLATE_DESCRIPTIONS] || '',
-        content,
-    }));
-};
-
 const mutatedFields = new Set<keyof Settings>();
 
 const markMutated = (fields: (keyof Settings)[]) => {
@@ -64,49 +50,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         set({ isLoading: true });
         try {
             const settings = await storage.getSettings();
-
-            const hadEmptyPrompts = !settings.prompts || settings.prompts.length === 0;
-            const repairedPrompts = hadEmptyPrompts ? getDefaultPrompts() : settings.prompts;
-            const hasValidDefault = repairedPrompts.some(
-                (p) => p.id === settings.defaultPolishTemplate,
-            );
-            const repairedDefaultTemplate = hasValidDefault
-                ? settings.defaultPolishTemplate
-                : repairedPrompts[0]?.id || 'professional';
-            const needsRepair =
-                hadEmptyPrompts || repairedDefaultTemplate !== settings.defaultPolishTemplate;
-
             const currentState = get();
             const hydrated: Settings = {
                 ...settings,
-                prompts: repairedPrompts,
-                defaultPolishTemplate: repairedDefaultTemplate,
             };
 
             for (const key of mutatedFields) {
                 (hydrated as any)[key] = currentState[key];
             }
 
-            // Hydrate memory first so a subsequent repair write failure never blanks the UI.
             set({ ...hydrated, isLoading: false });
-
-            if (
-                needsRepair &&
-                !mutatedFields.has('prompts') &&
-                !mutatedFields.has('defaultPolishTemplate')
-            ) {
-                try {
-                    await storage.repairSettingsPrompts(getDefaultPrompts());
-                } catch (repairError) {
-                    console.warn('Failed to persist repaired default prompts:', repairError);
-                }
-            }
         } catch (error) {
             console.error('Failed to load settings:', error);
             const currentState = get();
             set({
                 prompts:
-                    currentState.prompts.length > 0 ? currentState.prompts : getDefaultPrompts(),
+                    currentState.prompts.length > 0 ? currentState.prompts : buildDefaultPrompts(),
                 isLoading: false,
             });
         }
@@ -218,7 +177,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     },
 
     resetPrompts: async () => {
-        const defaultPrompts = getDefaultPrompts();
+        const defaultPrompts = buildDefaultPrompts();
         markMutated(['prompts']);
         set({ prompts: defaultPrompts });
         await storage.updateSettings({ prompts: defaultPrompts });

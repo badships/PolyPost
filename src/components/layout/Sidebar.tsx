@@ -246,7 +246,7 @@ export const Sidebar: React.FC = () => {
                                     </span>
 
                                     {/* Folder Actions */}
-                                    <div className="absolute right-1 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex">
+                                    <div className="absolute right-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity hidden sm:flex">
                                         <div className="flex bg-bg-tertiary rounded shadow-sm border border-border-primary">
                                             <button
                                                 onClick={(e) => {

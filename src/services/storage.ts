@@ -1,4 +1,4 @@
-import type { Post, Variant, Folder, Settings, PolishPrompt } from '@/types';
+import type { Post, Variant, Folder, Settings } from '@/types';
 import { getWebExt } from '@/services/webext';
 import { DEFAULT_SETTINGS, normalizeSettings } from '@/services/settingsDefaults';
 
@@ -12,9 +12,17 @@ const STORAGE_KEYS = {
 
 type StoredSettingsRecord = Settings & { __updatedAt?: number };
 
+const STORAGE_LOCK_NAME = 'polypost_storage_lock';
+
 let storageQueue: Promise<unknown> = Promise.resolve();
 const enqueueStorageOp = <T>(fn: () => Promise<T>): Promise<T> => {
-    const next = storageQueue.then(fn, fn);
+    const runWithLock = async (): Promise<T> => {
+        if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+            return (await navigator.locks.request(STORAGE_LOCK_NAME, () => fn())) as T;
+        }
+        return fn();
+    };
+    const next = storageQueue.then(runWithLock, runWithLock);
     storageQueue = next.then(
         () => undefined,
         () => undefined,
@@ -126,16 +134,20 @@ const _saveFolders = async (folders: Folder[]): Promise<void> => {
     writeLocal(STORAGE_KEYS.FOLDERS, folders);
 };
 
-const _getSettingsRecord = async (): Promise<Settings> => {
+const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Settings> => {
+    const strict = options?.strict ?? false;
     const webext = getWebExt();
     let syncRaw: Partial<StoredSettingsRecord> | undefined;
     let localRaw: Partial<StoredSettingsRecord> | undefined;
+    let syncError: unknown;
+    let localError: unknown;
 
     if (webext?.storage?.sync) {
         try {
             const syncResult = await webext.storage.sync.get(STORAGE_KEYS.SETTINGS);
             syncRaw = syncResult?.[STORAGE_KEYS.SETTINGS];
         } catch (error) {
+            syncError = error;
             console.warn('Failed to read settings from storage.sync:', error);
         }
     }
@@ -145,11 +157,28 @@ const _getSettingsRecord = async (): Promise<Settings> => {
             const localResult = await webext.storage.local.get(STORAGE_KEYS.SETTINGS);
             localRaw = localResult?.[STORAGE_KEYS.SETTINGS];
         } catch (error) {
+            localError = error;
             console.warn('Failed to read settings from storage.local:', error);
         }
     }
 
+    if (strict) {
+        if (localError !== undefined) {
+            throw localError;
+        }
+        if (localRaw === undefined && syncError !== undefined) {
+            throw syncError;
+        }
+    }
+
     if (syncRaw !== undefined || localRaw !== undefined) {
+        if (localRaw?.__updatedAt !== undefined) {
+            lastSettingsUpdatedAt = Math.max(lastSettingsUpdatedAt, localRaw.__updatedAt);
+        }
+        if (syncRaw?.__updatedAt !== undefined) {
+            lastSettingsUpdatedAt = Math.max(lastSettingsUpdatedAt, syncRaw.__updatedAt);
+        }
+
         let chosen: Partial<StoredSettingsRecord> | undefined;
         if (syncRaw !== undefined && localRaw !== undefined) {
             const localUpdatedAt = localRaw.__updatedAt ?? 0;
@@ -159,11 +188,11 @@ const _getSettingsRecord = async (): Promise<Settings> => {
             chosen = localRaw ?? syncRaw;
         }
 
-        if (chosen?.__updatedAt !== undefined) {
-            lastSettingsUpdatedAt = Math.max(lastSettingsUpdatedAt, chosen.__updatedAt);
-        }
-
         return normalizeSettings(stripSettingsMetadata(chosen));
+    }
+
+    if (localError !== undefined || syncError !== undefined) {
+        throw localError ?? syncError;
     }
 
     if (webext?.storage?.sync || webext?.storage?.local) {
@@ -387,34 +416,8 @@ export const storage = {
 
     async updateSettings(updates: Partial<Settings>): Promise<void> {
         return enqueueStorageOp(async () => {
-            const settings = await _getSettingsRecord();
+            const settings = await _getSettingsRecord({ strict: true });
             await _saveSettingsRecord({ ...DEFAULT_SETTINGS, ...settings, ...updates });
-        });
-    },
-
-    async repairSettingsPrompts(defaultPrompts: PolishPrompt[]): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            const current = await _getSettingsRecord();
-            const hadEmptyPrompts = !current.prompts || current.prompts.length === 0;
-            const repairedPrompts = hadEmptyPrompts ? defaultPrompts : current.prompts;
-            const hasValidDefault = repairedPrompts.some(
-                (p) => p.id === current.defaultPolishTemplate,
-            );
-            const repairedDefaultTemplate = hasValidDefault
-                ? current.defaultPolishTemplate
-                : repairedPrompts[0]?.id || 'professional';
-
-            if (!hadEmptyPrompts && repairedDefaultTemplate === current.defaultPolishTemplate) {
-                return current;
-            }
-
-            const repaired: Settings = {
-                ...current,
-                prompts: repairedPrompts,
-                defaultPolishTemplate: repairedDefaultTemplate,
-            };
-            await _saveSettingsRecord(repaired);
-            return repaired;
         });
     },
 };
