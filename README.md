@@ -23,7 +23,6 @@ One codebase builds extensions for Chrome, Firefox, and Safari.
 ## Project Structure
 
 - `src/background/`: Service worker / background script entry
-- `src/popup/`: Chrome popup UI
 - `src/sidepanel/`: Main app UI (Dashboard, Editor, Settings, Prompts, Quick Translate, Follower Filter)
 - `src/content/`: X/Twitter content scripts (`followersFilter.ts`, `floatingAppHost.ts`)
 - `src/components/`: Shared UI, layout, library, and editor components
@@ -70,7 +69,7 @@ npm run build:firefox  # dist/firefox
 npm run build:safari   # dist/safari (WebExtension folder for Safari converter)
 ```
 
-Preview production build:
+Preview production build (open `/src/sidepanel/index.html` in your browser):
 
 ```bash
 npm run preview

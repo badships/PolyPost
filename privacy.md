@@ -21,7 +21,7 @@ PolyPost only transmits data when you explicitly use certain features:
 
 1. **AI Features (OpenAI or compatible providers)**
     - When you click polish or translate, the selected content and relevant options are sent to the API endpoint you configure (OpenAI by default, or a compatible third-party provider).
-    - Your API key is stored locally in browser extension storage and is used only to authenticate requests directly to that provider.
+    - Your API key is stored in your browser extension storage (`storage.sync` when available, with fallback to `storage.local`) and is used only to authenticate requests directly to that provider.
     - We do not receive or store your content or API key.
     - Data is processed under the chosen provider's own data usage policy.
 

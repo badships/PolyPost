@@ -129,6 +129,10 @@ export const proxyFetch: typeof fetch = async (input, init) => {
         },
     });
 
+    if (!response || response.status < 200 || response.status > 599) {
+        throw new TypeError(response?.statusText || 'Network error');
+    }
+
     return new Response(response.body, {
         status: response.status,
         statusText: response.statusText,

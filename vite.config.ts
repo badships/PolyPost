@@ -261,7 +261,14 @@ const buildManifest = () => {
 const target = getTargetBrowser();
 
 export default defineConfig({
-    plugins: [react(), crx({ manifest: buildManifest() }), sanitizeBuiltManifestPlugin(target)],
+    plugins: [
+        react(),
+        crx({
+            manifest: buildManifest(),
+            browser: target === 'chrome' ? 'chrome' : 'firefox',
+        }),
+        sanitizeBuiltManifestPlugin(target),
+    ],
     resolve: {
         alias: {
             '@': resolve(__dirname, 'src'),
@@ -284,7 +291,6 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 sidepanel: 'src/sidepanel/index.html',
-                popup: 'src/popup/index.html',
             },
         },
     },

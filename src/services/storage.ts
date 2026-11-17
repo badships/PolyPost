@@ -177,15 +177,22 @@ export const storage = {
     },
 
     async deleteFolder(id: string): Promise<void> {
-        const folders = await this.getFolders();
+        const [folders, posts] = await Promise.all([this.getFolders(), this.getPosts()]);
         const filtered = folders.filter((f) => f.id !== id);
-        await this.saveFolders(filtered);
-        // Move posts in this folder to uncategorized
-        const posts = await this.getPosts();
         const updatedPosts = posts.map((p) =>
             p.folderId === id ? { ...p, folderId: null, updatedAt: Date.now() } : p,
         );
-        await this.savePosts(updatedPosts);
+        const webext = getWebExt();
+        if (webext?.storage?.local) {
+            await webext.storage.local.set({
+                [STORAGE_KEYS.FOLDERS]: filtered,
+                [STORAGE_KEYS.POSTS]: updatedPosts,
+            });
+            return;
+        }
+
+        writeLocal(STORAGE_KEYS.FOLDERS, filtered);
+        writeLocal(STORAGE_KEYS.POSTS, updatedPosts);
     },
 
     // ============================================
@@ -193,24 +200,65 @@ export const storage = {
     // ============================================
     async getSettings(): Promise<Settings> {
         const webext = getWebExt();
-        const settingsStorage = webext?.storage?.sync || webext?.storage?.local;
-        if (settingsStorage) {
-            const result = await settingsStorage.get(STORAGE_KEYS.SETTINGS);
-            return normalizeSettings(result[STORAGE_KEYS.SETTINGS]);
+        if (webext?.storage?.sync) {
+            try {
+                const syncResult = await webext.storage.sync.get(STORAGE_KEYS.SETTINGS);
+                if (syncResult?.[STORAGE_KEYS.SETTINGS] !== undefined) {
+                    return normalizeSettings(syncResult[STORAGE_KEYS.SETTINGS]);
+                }
+            } catch (error) {
+                console.warn('Failed to read settings from storage.sync:', error);
+            }
+        }
+
+        if (webext?.storage?.local) {
+            const localResult = await webext.storage.local.get(STORAGE_KEYS.SETTINGS);
+            return normalizeSettings(localResult?.[STORAGE_KEYS.SETTINGS]);
         }
 
         return normalizeSettings(readLocal<Partial<Settings> | null>(STORAGE_KEYS.SETTINGS, null));
     },
 
     async saveSettings(settings: Settings): Promise<void> {
+        const normalized = normalizeSettings(settings);
         const webext = getWebExt();
-        const settingsStorage = webext?.storage?.sync || webext?.storage?.local;
-        if (settingsStorage) {
-            await settingsStorage.set({ [STORAGE_KEYS.SETTINGS]: normalizeSettings(settings) });
+        if (!webext?.storage?.sync && !webext?.storage?.local) {
+            writeLocal(STORAGE_KEYS.SETTINGS, normalized);
             return;
         }
 
-        writeLocal(STORAGE_KEYS.SETTINGS, normalizeSettings(settings));
+        let localSaved = false;
+        let lastError: unknown;
+
+        if (webext?.storage?.local) {
+            try {
+                await webext.storage.local.set({ [STORAGE_KEYS.SETTINGS]: normalized });
+                localSaved = true;
+            } catch (error) {
+                lastError = error;
+            }
+        }
+
+        if (webext?.storage?.sync) {
+            try {
+                await webext.storage.sync.set({ [STORAGE_KEYS.SETTINGS]: normalized });
+                return;
+            } catch (error) {
+                lastError = error;
+                if (localSaved) {
+                    console.warn(
+                        'Failed to save settings to storage.sync; falling back to storage.local:',
+                        error,
+                    );
+                    await webext.storage.sync.remove?.(STORAGE_KEYS.SETTINGS).catch(() => {});
+                    return;
+                }
+            }
+        }
+
+        if (!localSaved && lastError) {
+            throw lastError;
+        }
     },
 
     async updateSettings(updates: Partial<Settings>): Promise<void> {

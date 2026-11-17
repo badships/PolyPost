@@ -18,3 +18,17 @@ export const normalizeModelName = (modelName?: string | null): string => {
     const trimmedModelName = modelName?.trim();
     return trimmedModelName || DEFAULT_OPENAI_MODEL;
 };
+
+export const supportsCustomTemperature = (modelName?: string | null): boolean => {
+    const normalized = normalizeModelName(modelName).toLowerCase();
+    if (
+        normalized === 'gpt-5-mini' ||
+        normalized === 'gpt-5-nano' ||
+        normalized.startsWith('gpt-5-mini-') ||
+        normalized.startsWith('gpt-5-nano-') ||
+        /^o[134](-|$)/.test(normalized)
+    ) {
+        return false;
+    }
+    return true;
+};

@@ -23,7 +23,6 @@ PolyPost 是一个基于 WebExtension（Manifest V3）的浏览器扩展，帮�
 ## 项目结构
 
 - `src/background/`：Service Worker / 后台脚本入口
-- `src/popup/`：Chrome 弹窗 UI
 - `src/sidepanel/`：主应用 UI（Dashboard、Editor、Settings、Prompts、Quick Translate、Follower Filter）
 - `src/content/`：X/Twitter 内容脚本（`followersFilter.ts`、`floatingAppHost.ts`）
 - `src/components/`：共享 UI、布局、内容库与编辑器组件
@@ -70,7 +69,7 @@ npm run build:firefox  # dist/firefox
 npm run build:safari   # dist/safari（给 Safari Converter 的 WebExtension 目录）
 ```
 
-预览生产构建：
+预览生产构建（在浏览器中访问 `/src/sidepanel/index.html`）：
 
 ```bash
 npm run preview

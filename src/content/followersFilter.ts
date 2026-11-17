@@ -240,7 +240,13 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
         return false;
     };
 
+    let disposed = false;
+
     const applyFilters = () => {
+        if (disposed) {
+            return;
+        }
+
         const listType = getListType();
         if (!listType) {
             return;
@@ -254,6 +260,10 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
     };
 
     const applyFiltersToCells = (cells: HTMLElement[]) => {
+        if (disposed) {
+            return;
+        }
+
         const listType = getListType();
         if (!listType || cells.length === 0) {
             return;
@@ -502,6 +512,10 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
     };
 
     const updatePanelVisibility = () => {
+        if (disposed) {
+            return;
+        }
+
         const panel = document.getElementById(PANEL_ID);
         if (!panel) {
             return;
@@ -526,14 +540,19 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
     };
 
     let scheduled = false;
+    let rafId: number | null = null;
     const scheduleApplyFull = () => {
-        if (scheduled) {
+        if (disposed || scheduled) {
             return;
         }
 
         scheduled = true;
-        window.requestAnimationFrame(() => {
+        rafId = window.requestAnimationFrame(() => {
+            rafId = null;
             scheduled = false;
+            if (disposed) {
+                return;
+            }
             updatePanelVisibility();
             applyFilters();
         });
@@ -541,8 +560,9 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
 
     let pendingCells = new Set<HTMLElement>();
     let pendingTimer: number | null = null;
+    let idleCallbackId: number | null = null;
     const scheduleApplyForCells = (cells: HTMLElement[]) => {
-        if (cells.length === 0) {
+        if (disposed || cells.length === 0) {
             return;
         }
 
@@ -554,15 +574,24 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
 
         pendingTimer = window.setTimeout(() => {
             pendingTimer = null;
+            if (disposed) {
+                return;
+            }
             const batch = Array.from(pendingCells);
             pendingCells.clear();
             if (batch.length === 0) {
                 return;
             }
 
-            const run = () => applyFiltersToCells(batch);
+            const run = () => {
+                idleCallbackId = null;
+                if (disposed) {
+                    return;
+                }
+                applyFiltersToCells(batch);
+            };
             if ('requestIdleCallback' in window) {
-                (window as any).requestIdleCallback(run, { timeout: 200 });
+                idleCallbackId = (window as any).requestIdleCallback(run, { timeout: 200 });
             } else {
                 run();
             }
@@ -640,11 +669,21 @@ const injectFollowersFilter = (copy?: PanelCopy) => {
     };
 
     const cleanup = () => {
+        disposed = true;
+        scheduled = false;
         observer.disconnect();
         window.clearInterval(routeInterval);
+        if (rafId !== null) {
+            window.cancelAnimationFrame(rafId);
+            rafId = null;
+        }
         if (pendingTimer !== null) {
             window.clearTimeout(pendingTimer);
             pendingTimer = null;
+        }
+        if (idleCallbackId !== null && 'cancelIdleCallback' in window) {
+            (window as any).cancelIdleCallback(idleCallbackId);
+            idleCallbackId = null;
         }
         pendingCells.clear();
         getUserCells().forEach((cell) => {

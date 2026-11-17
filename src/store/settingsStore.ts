@@ -41,6 +41,12 @@ const getDefaultPrompts = (): PolishPrompt[] => {
     }));
 };
 
+const mutatedFields = new Set<keyof Settings>();
+
+const markMutated = (fields: (keyof Settings)[]) => {
+    fields.forEach((field) => mutatedFields.add(field));
+};
+
 export const useSettingsStore = create<SettingsState>((set, get) => ({
     openaiApiKey: '',
     provider: 'openai',
@@ -59,36 +65,53 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         try {
             const settings = await storage.getSettings();
 
-            let prompts = settings.prompts;
-            let shouldPersist = false;
-            if (!prompts || prompts.length === 0) {
-                prompts = getDefaultPrompts();
-                shouldPersist = true;
-            }
-
-            const hasValidDefault = prompts.some((p) => p.id === settings.defaultPolishTemplate);
-            const defaultPolishTemplate = hasValidDefault
+            const hadEmptyPrompts = !settings.prompts || settings.prompts.length === 0;
+            const repairedPrompts = hadEmptyPrompts ? getDefaultPrompts() : settings.prompts;
+            const hasValidDefault = repairedPrompts.some(
+                (p) => p.id === settings.defaultPolishTemplate,
+            );
+            const repairedDefaultTemplate = hasValidDefault
                 ? settings.defaultPolishTemplate
-                : prompts[0]?.id || 'professional';
-            if (defaultPolishTemplate !== settings.defaultPolishTemplate) {
-                shouldPersist = true;
-            }
+                : repairedPrompts[0]?.id || 'professional';
+            const needsRepair =
+                hadEmptyPrompts || repairedDefaultTemplate !== settings.defaultPolishTemplate;
 
-            const resolvedSettings = {
+            const currentState = get();
+            const hydrated: Settings = {
                 ...settings,
-                prompts,
-                defaultPolishTemplate,
+                prompts: repairedPrompts,
+                defaultPolishTemplate: repairedDefaultTemplate,
             };
 
-            if (shouldPersist) {
-                await storage.saveSettings(resolvedSettings);
+            for (const key of mutatedFields) {
+                (hydrated as any)[key] = currentState[key];
             }
 
-            set({ ...resolvedSettings, isLoading: false });
+            // Hydrate memory first so a subsequent repair write failure never blanks the UI.
+            set({ ...hydrated, isLoading: false });
+
+            if (
+                needsRepair &&
+                !mutatedFields.has('prompts') &&
+                !mutatedFields.has('defaultPolishTemplate')
+            ) {
+                try {
+                    await storage.updateSettings({
+                        prompts: hydrated.prompts,
+                        defaultPolishTemplate: hydrated.defaultPolishTemplate,
+                    });
+                } catch (repairError) {
+                    console.warn('Failed to persist repaired default prompts:', repairError);
+                }
+            }
         } catch (error) {
             console.error('Failed to load settings:', error);
-            // Fallback to defaults
-            set({ prompts: getDefaultPrompts(), isLoading: false });
+            const currentState = get();
+            set({
+                prompts:
+                    currentState.prompts.length > 0 ? currentState.prompts : getDefaultPrompts(),
+                isLoading: false,
+            });
         }
     },
 
@@ -99,47 +122,56 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
                 ? { modelName: normalizeModelName(updates.modelName) }
                 : {}),
         };
-        await storage.updateSettings(normalizedUpdates);
+        markMutated(Object.keys(normalizedUpdates) as (keyof Settings)[]);
         set(normalizedUpdates);
+        await storage.updateSettings(normalizedUpdates);
     },
 
     setOpenaiApiKey: async (key: string) => {
-        await storage.updateSettings({ openaiApiKey: key });
+        markMutated(['openaiApiKey']);
         set({ openaiApiKey: key });
+        await storage.updateSettings({ openaiApiKey: key });
     },
 
     setProvider: async (provider: 'openai' | 'custom') => {
-        await storage.updateSettings({ provider });
+        markMutated(['provider']);
         set({ provider });
+        await storage.updateSettings({ provider });
     },
 
     setCustomApiUrl: async (url: string) => {
-        await storage.updateSettings({ customApiUrl: url });
+        markMutated(['customApiUrl']);
         set({ customApiUrl: url });
+        await storage.updateSettings({ customApiUrl: url });
     },
 
     setCustomApiKey: async (key: string) => {
-        await storage.updateSettings({ customApiKey: key });
+        markMutated(['customApiKey']);
         set({ customApiKey: key });
+        await storage.updateSettings({ customApiKey: key });
     },
 
     setModelName: async (modelName: string) => {
         const normalizedModelName = normalizeModelName(modelName);
-        await storage.updateSettings({ modelName: normalizedModelName });
+        markMutated(['modelName']);
         set({ modelName: normalizedModelName });
+        await storage.updateSettings({ modelName: normalizedModelName });
     },
 
     setDefaultLanguage: async (language: Language) => {
-        await storage.updateSettings({ defaultLanguage: language });
+        markMutated(['defaultLanguage']);
         set({ defaultLanguage: language });
+        await storage.updateSettings({ defaultLanguage: language });
     },
 
     setDefaultPolishTemplate: async (template: string) => {
-        await storage.updateSettings({ defaultPolishTemplate: template });
+        markMutated(['defaultPolishTemplate']);
         set({ defaultPolishTemplate: template });
+        await storage.updateSettings({ defaultPolishTemplate: template });
     },
 
     setTheme: async (theme: 'dark' | 'light' | 'system') => {
+        markMutated(['theme']);
         set({ theme });
         try {
             await storage.updateSettings({ theme });
@@ -149,13 +181,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     },
 
     setUiLanguage: async (language: 'en' | 'zh') => {
-        await storage.updateSettings({ uiLanguage: language });
+        markMutated(['uiLanguage']);
         set({ uiLanguage: language });
+        await storage.updateSettings({ uiLanguage: language });
     },
 
     addPrompt: async (prompt: PolishPrompt) => {
         const { prompts } = get();
         const newPrompts = [...prompts, prompt];
+        markMutated(['prompts']);
         set({ prompts: newPrompts });
         await storage.updateSettings({ prompts: newPrompts });
     },
@@ -163,6 +197,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     updatePrompt: async (updatedPrompt: PolishPrompt) => {
         const { prompts } = get();
         const newPrompts = prompts.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p));
+        markMutated(['prompts']);
         set({ prompts: newPrompts });
         await storage.updateSettings({ prompts: newPrompts });
     },
@@ -177,6 +212,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             defaultPolishTemplate === id
                 ? newPrompts[0]?.id || 'professional'
                 : defaultPolishTemplate;
+        markMutated(['prompts', 'defaultPolishTemplate']);
         set({ prompts: newPrompts, defaultPolishTemplate: nextDefaultTemplate });
         await storage.updateSettings({
             prompts: newPrompts,
@@ -186,6 +222,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     resetPrompts: async () => {
         const defaultPrompts = getDefaultPrompts();
+        markMutated(['prompts']);
         set({ prompts: defaultPrompts });
         await storage.updateSettings({ prompts: defaultPrompts });
     },

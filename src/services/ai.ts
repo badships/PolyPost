@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import type { Language } from '@/types';
 import { getTranslationPrompt, LANGUAGE_FULL_NAMES } from './prompts';
 import { proxyFetch } from './proxyFetch';
-import { normalizeModelName } from './models';
+import { normalizeModelName, supportsCustomTemperature } from './models';
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -89,7 +89,7 @@ Rewritten tweet:`;
                     },
                 ],
                 max_tokens: 300,
-                temperature: 0.7,
+                ...(supportsCustomTemperature(resolvedModelName) ? { temperature: 0.7 } : {}),
             });
 
             const generatedContent = response.choices[0]?.message?.content?.trim() || '';
@@ -141,7 +141,7 @@ Rewritten tweet:`;
                     },
                 ],
                 max_tokens: 300,
-                temperature: 0.3, // Lower temperature for more accurate translation
+                ...(supportsCustomTemperature(resolvedModelName) ? { temperature: 0.3 } : {}),
             });
 
             const translatedContent = response.choices[0]?.message?.content?.trim() || '';

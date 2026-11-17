@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { Sidebar, Header } from '@/components/layout';
 import { PostGrid, FolderModal, DeleteFolderModal } from '@/components/library';
 import { Button } from '@/components/ui';
-import { Plus } from 'lucide-react';
+import { Plus, Edit2, Trash2 } from 'lucide-react';
 import { PromptSettings } from './PromptSettings';
 import { QuickTranslate } from './QuickTranslate';
 import { FollowersFilter } from './FollowersFilter';
@@ -20,7 +20,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
 }) => {
     const { posts, variants, createPost, setCurrentPost, isLoading } = usePostsStore();
     const { folders } = useFoldersStore();
-    const { libraryFilter, selectedFolderId, searchQuery, dashboardView } = useUIStore();
+    const {
+        libraryFilter,
+        selectedFolderId,
+        searchQuery,
+        dashboardView,
+        openFolderModal,
+        openDeleteFolderModal,
+    } = useUIStore();
     const { t } = useTranslation();
 
     // Filter posts
@@ -102,10 +109,36 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/* Page header - Hide for prompts view as it handles its own header */}
                     {dashboardView === 'posts' && (
                         <div className="mb-6">
-                            <div className="flex items-center justify-between">
-                                <h1 className="text-2xl font-bold text-text-primary">
-                                    {getPageTitle()}
-                                </h1>
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                    <h1 className="text-2xl font-bold text-text-primary truncate">
+                                        {getPageTitle()}
+                                    </h1>
+                                    {selectedFolderId && (
+                                        <div className="flex items-center gap-1 shrink-0">
+                                            <button
+                                                onClick={() =>
+                                                    openFolderModal('edit', selectedFolderId)
+                                                }
+                                                className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-secondary transition-colors"
+                                                aria-label={t('actions.edit')}
+                                                title={t('actions.edit')}
+                                            >
+                                                <Edit2 size={15} />
+                                            </button>
+                                            <button
+                                                onClick={() =>
+                                                    openDeleteFolderModal(selectedFolderId)
+                                                }
+                                                className="p-1.5 rounded-lg text-text-muted hover:text-red-500 hover:bg-bg-secondary transition-colors"
+                                                aria-label={t('actions.delete')}
+                                                title={t('actions.delete')}
+                                            >
+                                                <Trash2 size={15} />
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                                 <Button
                                     onClick={handleCreateNew}
                                     leftIcon={<Plus size={18} />}

@@ -81,19 +81,39 @@ export const ensureHostPermission = async (
           }
         | undefined;
 
-    if (!permissionsApi?.contains || !permissionsApi?.request) {
-        return { granted: true, origin };
-    }
-
-    const alreadyGranted = await permissionsApi.contains({ origins: [origin] });
-    if (alreadyGranted) {
+    if (!permissionsApi?.request) {
+        if (permissionsApi?.contains) {
+            try {
+                const alreadyGranted = await permissionsApi.contains({ origins: [origin] });
+                return alreadyGranted
+                    ? { granted: true, origin }
+                    : { granted: false, origin, reason: 'denied' };
+            } catch {
+                return { granted: false, origin, reason: 'denied' };
+            }
+        }
         return { granted: true, origin };
     }
 
     try {
         const granted = await permissionsApi.request({ origins: [origin] });
-        return granted ? { granted: true, origin } : { granted: false, origin, reason: 'denied' };
+        if (granted) {
+            return { granted: true, origin };
+        }
     } catch {
-        return { granted: false, origin, reason: 'denied' };
+        // Fall through to contains() check if request() failed outside a user gesture.
     }
+
+    if (permissionsApi.contains) {
+        try {
+            const alreadyGranted = await permissionsApi.contains({ origins: [origin] });
+            if (alreadyGranted) {
+                return { granted: true, origin };
+            }
+        } catch {
+            // Ignore contains failure and return denied.
+        }
+    }
+
+    return { granted: false, origin, reason: 'denied' };
 };

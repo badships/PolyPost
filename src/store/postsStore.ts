@@ -39,7 +39,10 @@ export const usePostsStore = create<PostsState>((set, get) => ({
         try {
             const [posts, variants] = await Promise.all([
                 storage.getPosts(),
-                storage.getVariants(),
+                storage.getVariants().catch((variantError) => {
+                    console.warn('Failed to load variants:', variantError);
+                    return [] as Variant[];
+                }),
             ]);
             set({ posts, variants, isLoading: false });
         } catch (error) {
