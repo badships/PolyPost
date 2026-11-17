@@ -11,7 +11,7 @@ PolyPost ("we", "our", or "us") is a cross-browser WebExtension (for Chrome, Fir
 PolyPost stores your data on your device using browser extension storage:
 
 - **Content data**: posts, drafts, variants, and folder structures are saved in `storage.local`.
-- **Settings**: preferences such as default language, UI language, theme, prompts, provider selection, custom API URL, model name, and API keys are saved in `storage.sync` (when supported and enabled) with fallback to `storage.local`.
+- **Settings**: preferences such as default language, UI language, theme, prompts, provider selection, custom API URL, model name, and API keys are saved in `storage.local` and synced via `storage.sync` when supported and enabled.
 
 We do not receive or store this data on our servers.
 
@@ -21,7 +21,7 @@ PolyPost only transmits data when you explicitly use certain features:
 
 1. **AI Features (OpenAI or compatible providers)**
     - When you click polish or translate, the selected content and relevant options are sent to the API endpoint you configure (OpenAI by default, or a compatible third-party provider).
-    - Your API key is stored in your browser extension storage (`storage.sync` when available, with fallback to `storage.local`) and is used only to authenticate requests directly to that provider.
+    - Your API key is stored in your browser extension storage (`storage.local` and, when supported and enabled, `storage.sync`) and is used only to authenticate requests directly to that provider.
     - We do not receive or store your content or API key.
     - Data is processed under the chosen provider's own data usage policy.
 

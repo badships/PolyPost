@@ -133,7 +133,10 @@ export const proxyFetch: typeof fetch = async (input, init) => {
         throw new TypeError(response?.statusText || 'Network error');
     }
 
-    return new Response(response.body, {
+    const isNullBodyStatus =
+        response.status === 204 || response.status === 205 || response.status === 304;
+
+    return new Response(isNullBodyStatus ? null : response.body, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,

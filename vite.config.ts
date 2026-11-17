@@ -77,12 +77,15 @@ const addSafariFloatingHostScript = (manifest: any) => {
     });
 };
 
-const addSafariFloatingHostResources = (manifest: any) => {
+const addSafariFloatingHostResources = (manifest: any, command: 'build' | 'serve') => {
     if (!Array.isArray(manifest.web_accessible_resources)) {
         manifest.web_accessible_resources = [];
     }
 
-    const resources = ['src/sidepanel/index.html', 'assets/*', 'icons/*'];
+    const resources =
+        command === 'build'
+            ? ['src/sidepanel/index.html', 'assets/*', 'icons/*']
+            : ['assets/*', 'icons/*'];
     const exists = manifest.web_accessible_resources.some((entry: any) => {
         const entryResources = Array.isArray(entry?.resources) ? entry.resources : [];
         return resources.every((resource) => entryResources.includes(resource));
@@ -115,7 +118,7 @@ const sanitizeFirefoxInnerHtmlAssignments = async (target: TargetBrowser) => {
     const dynamicInnerHtmlPattern = /([A-Za-z_$][\w$]*)\.innerHTML=([A-Za-z_$][\w$]*);/g;
 
     for (const assetName of assetNames) {
-        if (!assetName.startsWith('globals-') || !assetName.endsWith('.js')) {
+        if (!assetName.endsWith('.js')) {
             continue;
         }
 
@@ -198,7 +201,7 @@ const sanitizeBuiltManifestPlugin = (target: TargetBrowser) => {
     };
 };
 
-const buildManifest = () => {
+const buildManifest = (command: 'build' | 'serve' = 'build') => {
     const target = getTargetBrowser();
     const manifest = clone(baseManifest) as any;
 
@@ -206,6 +209,10 @@ const buildManifest = () => {
 
     if (target !== 'chrome') {
         delete manifest.side_panel;
+        manifest.options_ui = {
+            page: 'src/sidepanel/index.html',
+            open_in_tab: true,
+        };
         if (Array.isArray(manifest.permissions)) {
             manifest.permissions = manifest.permissions.filter((permission: string) => {
                 return permission !== 'sidePanel';
@@ -252,7 +259,7 @@ const buildManifest = () => {
     if (target === 'safari') {
         removeActionPopup(manifest);
         addSafariFloatingHostScript(manifest);
-        addSafariFloatingHostResources(manifest);
+        addSafariFloatingHostResources(manifest, command);
     }
 
     return manifest;
@@ -264,7 +271,7 @@ export default defineConfig({
     plugins: [
         react(),
         crx({
-            manifest: buildManifest(),
+            manifest: ({ command }) => buildManifest(command),
             browser: target === 'chrome' ? 'chrome' : 'firefox',
         }),
         sanitizeBuiltManifestPlugin(target),

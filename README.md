@@ -142,7 +142,7 @@ xcrun safari-web-extension-converter dist/safari
 
 ## Configuration & Security
 
-- API keys are entered via Settings and stored locally in browser extension storage; do not hardcode secrets.
+- API keys are entered via Settings and stored in browser extension storage (`storage.local`, and `storage.sync` when available); do not hardcode secrets.
 - If you add permissions, update `manifest.json` and explain the purpose.
 
 ## Contributing

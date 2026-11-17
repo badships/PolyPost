@@ -241,31 +241,9 @@ export const Sidebar: React.FC = () => {
                                             </span>
                                         )}
                                     </button>
-                                    <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 z-20 flex items-center gap-1 whitespace-nowrap text-xs bg-bg-tertiary text-text-primary pl-2 pr-1 py-1 rounded border border-border-primary shadow-md opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity sm:hidden">
-                                        <span>{folder.name}</span>
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                openFolderModal('edit', folder.id);
-                                            }}
-                                            className="p-1 text-text-secondary hover:text-text-primary hover:bg-bg-secondary rounded transition-colors"
-                                            aria-label={t('actions.edit')}
-                                            title={t('actions.edit')}
-                                        >
-                                            <Edit2 size={12} />
-                                        </button>
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                openDeleteFolderModal(folder.id);
-                                            }}
-                                            className="p-1 text-text-secondary hover:text-red-500 hover:bg-bg-secondary rounded transition-colors"
-                                            aria-label={t('actions.delete')}
-                                            title={t('actions.delete')}
-                                        >
-                                            <Trash2 size={12} />
-                                        </button>
-                                    </div>
+                                    <span className="absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-xs bg-bg-tertiary text-text-primary px-2 py-1 rounded border border-border-primary shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity sm:hidden">
+                                        {folder.name}
+                                    </span>
 
                                     {/* Folder Actions */}
                                     <div className="absolute right-1 opacity-0 group-hover:opacity-100 transition-opacity hidden sm:flex">

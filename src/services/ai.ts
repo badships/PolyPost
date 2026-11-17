@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import type { Language } from '@/types';
 import { getTranslationPrompt, LANGUAGE_FULL_NAMES } from './prompts';
 import { proxyFetch } from './proxyFetch';
-import { normalizeModelName, supportsCustomTemperature } from './models';
+import { normalizeModelName, supportsCustomTemperature, usesMaxCompletionTokens } from './models';
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -75,6 +75,7 @@ Rewritten tweet:`;
         prompt = `${prompt}\n\n${this.getLanguageGuardrail()}`;
 
         try {
+            const isCustomEndpoint = Boolean(baseURL && baseURL !== DEFAULT_OPENAI_BASE_URL);
             const response = await client.chat.completions.create({
                 model: resolvedModelName,
                 messages: [
@@ -88,7 +89,9 @@ Rewritten tweet:`;
                         content: prompt,
                     },
                 ],
-                max_tokens: 300,
+                ...(usesMaxCompletionTokens(resolvedModelName, isCustomEndpoint)
+                    ? { max_completion_tokens: 300 }
+                    : { max_tokens: 300 }),
                 ...(supportsCustomTemperature(resolvedModelName) ? { temperature: 0.7 } : {}),
             });
 
@@ -127,6 +130,7 @@ Rewritten tweet:`;
         const prompt = getTranslationPrompt(content, targetLanguage);
 
         try {
+            const isCustomEndpoint = Boolean(baseURL && baseURL !== DEFAULT_OPENAI_BASE_URL);
             const response = await client.chat.completions.create({
                 model: resolvedModelName,
                 messages: [
@@ -140,7 +144,9 @@ Rewritten tweet:`;
                         content: prompt,
                     },
                 ],
-                max_tokens: 300,
+                ...(usesMaxCompletionTokens(resolvedModelName, isCustomEndpoint)
+                    ? { max_completion_tokens: 300 }
+                    : { max_tokens: 300 }),
                 ...(supportsCustomTemperature(resolvedModelName) ? { temperature: 0.3 } : {}),
             });
 

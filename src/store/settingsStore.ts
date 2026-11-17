@@ -96,10 +96,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
                 !mutatedFields.has('defaultPolishTemplate')
             ) {
                 try {
-                    await storage.updateSettings({
-                        prompts: hydrated.prompts,
-                        defaultPolishTemplate: hydrated.defaultPolishTemplate,
-                    });
+                    await storage.repairSettingsPrompts(getDefaultPrompts());
                 } catch (repairError) {
                     console.warn('Failed to persist repaired default prompts:', repairError);
                 }

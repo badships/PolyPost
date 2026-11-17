@@ -142,7 +142,7 @@ xcrun safari-web-extension-converter dist/safari
 
 ## 配置与安全
 
-- API Key 仅通过设置页输入并存储在浏览器扩展本地存储（Extension Storage）中，请勿硬编码
+- API Key 仅通过设置页输入并存储在浏览器扩展存储中（写入 `storage.local`，并在支持时通过 `storage.sync` 同步），请勿硬编码
 - 如需新增权限，请同步更新 `manifest.json` 并说明用途
 
 ## 贡献

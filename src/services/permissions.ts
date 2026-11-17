@@ -35,10 +35,10 @@ const toOriginPattern = (baseUrl: string): string | null => {
 
     try {
         const url = new URL(baseUrl.trim());
-        if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+        if ((url.protocol !== 'https:' && url.protocol !== 'http:') || !url.hostname) {
             return null;
         }
-        return `${url.protocol}//${url.host}/*`;
+        return `${url.protocol}//${url.hostname}/*`;
     } catch {
         return null;
     }
