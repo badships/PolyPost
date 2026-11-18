@@ -47,12 +47,12 @@ Development (Vite + CRXJS):
 npm run dev
 ```
 
-Targeted development:
+Targeted development (`dev:chrome` runs the Vite/CRXJS dev server; `dev:firefox` and `dev:safari` run `vite build --watch` to keep `dist/firefox` and `dist/safari` runnable as extension bundles):
 
 ```bash
-npm run dev:chrome
-npm run dev:firefox
-npm run dev:safari
+npm run dev:chrome   # Vite + CRXJS dev server
+npm run dev:firefox  # vite build --watch -> dist/firefox
+npm run dev:safari   # vite build --watch -> dist/safari
 ```
 
 Production build (includes type-check):

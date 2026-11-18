@@ -1,6 +1,7 @@
 // Background service worker for PolyPost WebExtension (Chrome/Firefox/Safari)
 
 import { getActiveTab, getWebExt, openPolyPostWindow } from '@/services/webext';
+import { handleStorageRpcMessage } from '@/services/storage';
 
 const webext = getWebExt();
 const X_HOSTS = ['x.com', 'twitter.com'];
@@ -127,7 +128,12 @@ const isProxyFetchMessage = (message: unknown): message is ProxyFetchMessage => 
     return candidate.type === 'proxyFetch' && typeof candidate.url === 'string';
 };
 
-webext?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+webext?.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
+    const rpcHandled = handleStorageRpcMessage(message, sender, sendResponse);
+    if (rpcHandled !== undefined) {
+        return rpcHandled;
+    }
+
     if (!isProxyFetchMessage(message)) {
         return undefined;
     }

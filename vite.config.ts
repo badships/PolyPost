@@ -207,7 +207,7 @@ const buildManifest = (command: 'build' | 'serve' = 'build') => {
 
     manifest.background = getBackgroundForTarget(target, manifest);
 
-    if (command === 'serve') {
+    if (command === 'serve' && target === 'chrome') {
         manifest.content_security_policy = {
             extension_pages:
                 "script-src 'self' http://localhost:5173; object-src 'self'; connect-src 'self' http://localhost:5173 ws://localhost:5173 https: http:;",
@@ -218,7 +218,6 @@ const buildManifest = (command: 'build' | 'serve' = 'build') => {
         delete manifest.side_panel;
         manifest.options_ui = {
             page: 'src/sidepanel/index.html',
-            open_in_tab: true,
         };
         if (Array.isArray(manifest.permissions)) {
             manifest.permissions = manifest.permissions.filter((permission: string) => {

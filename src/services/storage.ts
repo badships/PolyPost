@@ -1,6 +1,10 @@
-import type { Post, Variant, Folder, Settings } from '@/types';
+import type { Post, Variant, Folder, Settings, PolishPrompt } from '@/types';
 import { getWebExt } from '@/services/webext';
-import { DEFAULT_SETTINGS, normalizeSettings } from '@/services/settingsDefaults';
+import {
+    buildDefaultPrompts,
+    DEFAULT_SETTINGS,
+    normalizeSettings,
+} from '@/services/settingsDefaults';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -13,27 +17,125 @@ const STORAGE_KEYS = {
 type StoredSettingsRecord = Settings & { __updatedAt?: number };
 
 const STORAGE_LOCK_NAME = 'polypost_storage_lock';
+const STORAGE_RPC_TYPE = 'polypost:storage_rpc';
+const QUEUE_SYM = Symbol.for('polypost.storage.queue');
+const UPDATED_AT_SYM = Symbol.for('polypost.storage.lastUpdatedAt');
 
-let storageQueue: Promise<unknown> = Promise.resolve();
+type StorageMutationMethod =
+    | 'savePosts'
+    | 'addPost'
+    | 'updatePost'
+    | 'deletePost'
+    | 'saveVariants'
+    | 'addVariant'
+    | 'deleteVariant'
+    | 'updateVariant'
+    | 'saveFolders'
+    | 'addFolder'
+    | 'updateFolder'
+    | 'deleteFolder'
+    | 'saveSettings'
+    | 'updateSettings'
+    | 'addPrompt'
+    | 'updatePrompt'
+    | 'deletePrompt'
+    | 'resetPrompts';
+
+type StorageRpcMessage = {
+    type: typeof STORAGE_RPC_TYPE;
+    method: StorageMutationMethod;
+    args: unknown[];
+};
+
+type StorageRpcResponse = {
+    __polypostStorageRpc: true;
+    ok: boolean;
+    value?: unknown;
+    error?: string;
+};
+
+interface SharedStorageState {
+    [QUEUE_SYM]?: Promise<unknown>;
+    [UPDATED_AT_SYM]?: number;
+}
+
+const fallbackSharedState: SharedStorageState = {};
+
+const getSharedState = (): SharedStorageState => {
+    const webext = getWebExt();
+    const host = (webext?.storage ?? webext?.storage?.local) as unknown as
+        | (SharedStorageState & object)
+        | undefined;
+    if (host && (typeof host === 'object' || typeof host === 'function')) {
+        try {
+            if (typeof host[UPDATED_AT_SYM] !== 'number') {
+                host[UPDATED_AT_SYM] = 0;
+            }
+            if (!host[QUEUE_SYM]) {
+                host[QUEUE_SYM] = Promise.resolve();
+            }
+            return host;
+        } catch {
+            // Fall through when host object is frozen or non-extensible.
+        }
+    }
+
+    if (typeof fallbackSharedState[UPDATED_AT_SYM] !== 'number') {
+        fallbackSharedState[UPDATED_AT_SYM] = 0;
+    }
+    if (!fallbackSharedState[QUEUE_SYM]) {
+        fallbackSharedState[QUEUE_SYM] = Promise.resolve();
+    }
+    return fallbackSharedState;
+};
+
 const enqueueStorageOp = <T>(fn: () => Promise<T>): Promise<T> => {
+    const shared = getSharedState();
+    const prevQueue = shared[QUEUE_SYM] ?? Promise.resolve();
+
     const runWithLock = async (): Promise<T> => {
         if (typeof navigator !== 'undefined' && navigator.locks?.request) {
             return (await navigator.locks.request(STORAGE_LOCK_NAME, () => fn())) as T;
         }
         return fn();
     };
-    const next = storageQueue.then(runWithLock, runWithLock);
-    storageQueue = next.then(
+
+    const next = prevQueue.then(runWithLock, runWithLock);
+    shared[QUEUE_SYM] = next.then(
         () => undefined,
         () => undefined,
     );
     return next;
 };
 
-let lastSettingsUpdatedAt = 0;
+const getLastSettingsUpdatedAt = (): number => {
+    return getSharedState()[UPDATED_AT_SYM] ?? 0;
+};
+
+const bumpLastSettingsUpdatedAt = (timestamp?: number): void => {
+    if (typeof timestamp !== 'number') {
+        return;
+    }
+    const shared = getSharedState();
+    shared[UPDATED_AT_SYM] = Math.max(shared[UPDATED_AT_SYM] ?? 0, timestamp);
+};
+
 const nextSettingsTimestamp = (): number => {
-    lastSettingsUpdatedAt = Math.max(Date.now(), lastSettingsUpdatedAt + 1);
-    return lastSettingsUpdatedAt;
+    const shared = getSharedState();
+    const next = Math.max(Date.now(), (shared[UPDATED_AT_SYM] ?? 0) + 1);
+    shared[UPDATED_AT_SYM] = next;
+    return next;
+};
+
+const isEmbeddedFrame = (): boolean => {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+    try {
+        return window.top !== window;
+    } catch {
+        return true;
+    }
 };
 
 const stripSettingsMetadata = (
@@ -166,18 +268,14 @@ const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Setti
         if (localError !== undefined) {
             throw localError;
         }
-        if (localRaw === undefined && syncError !== undefined) {
+        if (syncError !== undefined) {
             throw syncError;
         }
     }
 
     if (syncRaw !== undefined || localRaw !== undefined) {
-        if (localRaw?.__updatedAt !== undefined) {
-            lastSettingsUpdatedAt = Math.max(lastSettingsUpdatedAt, localRaw.__updatedAt);
-        }
-        if (syncRaw?.__updatedAt !== undefined) {
-            lastSettingsUpdatedAt = Math.max(lastSettingsUpdatedAt, syncRaw.__updatedAt);
-        }
+        bumpLastSettingsUpdatedAt(localRaw?.__updatedAt);
+        bumpLastSettingsUpdatedAt(syncRaw?.__updatedAt);
 
         let chosen: Partial<StoredSettingsRecord> | undefined;
         if (syncRaw !== undefined && localRaw !== undefined) {
@@ -203,13 +301,12 @@ const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Setti
         STORAGE_KEYS.SETTINGS,
         null,
     );
-    if (webLocalRaw?.__updatedAt !== undefined) {
-        lastSettingsUpdatedAt = Math.max(lastSettingsUpdatedAt, webLocalRaw.__updatedAt);
-    }
+    bumpLastSettingsUpdatedAt(webLocalRaw?.__updatedAt);
+    void getLastSettingsUpdatedAt;
     return normalizeSettings(stripSettingsMetadata(webLocalRaw));
 };
 
-const _saveSettingsRecord = async (settings: Settings): Promise<void> => {
+const _saveSettingsRecord = async (settings: Settings): Promise<Settings> => {
     const clean = normalizeSettings(stripSettingsMetadata(settings as StoredSettingsRecord));
     const record: StoredSettingsRecord = {
         ...clean,
@@ -219,7 +316,7 @@ const _saveSettingsRecord = async (settings: Settings): Promise<void> => {
     const webext = getWebExt();
     if (!webext?.storage?.sync && !webext?.storage?.local) {
         writeLocal(STORAGE_KEYS.SETTINGS, record);
-        return;
+        return clean;
     }
 
     let localSaved = false;
@@ -253,20 +350,11 @@ const _saveSettingsRecord = async (settings: Settings): Promise<void> => {
     if (!localSaved && !syncSaved && lastError) {
         throw lastError;
     }
+
+    return clean;
 };
 
-/**
- * WebExtension Storage API wrapper for data persistence.
- * Includes fallback to localStorage for plain-browser web development.
- */
-export const storage = {
-    // ============================================
-    // Posts
-    // ============================================
-    async getPosts(): Promise<Post[]> {
-        return _getPosts();
-    },
-
+const localMutations = {
     async savePosts(posts: Post[]): Promise<void> {
         return enqueueStorageOp(() => _savePosts(posts));
     },
@@ -309,13 +397,6 @@ export const storage = {
         });
     },
 
-    // ============================================
-    // Variants
-    // ============================================
-    async getVariants(): Promise<Variant[]> {
-        return _getVariants();
-    },
-
     async saveVariants(variants: Variant[]): Promise<void> {
         return enqueueStorageOp(() => _saveVariants(variants));
     },
@@ -326,11 +407,6 @@ export const storage = {
             variants.push(variant);
             await _saveVariants(variants);
         });
-    },
-
-    async getVariantsByPostId(postId: string): Promise<Variant[]> {
-        const variants = await _getVariants();
-        return variants.filter((v) => v.postId === postId);
     },
 
     async deleteVariant(id: string): Promise<void> {
@@ -350,13 +426,6 @@ export const storage = {
                 await _saveVariants(variants);
             }
         });
-    },
-
-    // ============================================
-    // Folders
-    // ============================================
-    async getFolders(): Promise<Folder[]> {
-        return _getFolders();
     },
 
     async saveFolders(folders: Folder[]): Promise<void> {
@@ -403,6 +472,243 @@ export const storage = {
         });
     },
 
+    async saveSettings(settings: Settings): Promise<void> {
+        return enqueueStorageOp(async () => {
+            await _saveSettingsRecord(settings);
+        });
+    },
+
+    async updateSettings(updates: Partial<Settings>): Promise<Settings> {
+        return enqueueStorageOp(async () => {
+            const settings = await _getSettingsRecord({ strict: true });
+            return _saveSettingsRecord({ ...DEFAULT_SETTINGS, ...settings, ...updates });
+        });
+    },
+
+    async addPrompt(prompt: PolishPrompt): Promise<Settings> {
+        return enqueueStorageOp(async () => {
+            const settings = await _getSettingsRecord({ strict: true });
+            const exists = settings.prompts.some((p) => p.id === prompt.id);
+            const nextPrompts = exists
+                ? settings.prompts.map((p) => (p.id === prompt.id ? prompt : p))
+                : [...settings.prompts, prompt];
+            return _saveSettingsRecord({ ...settings, prompts: nextPrompts });
+        });
+    },
+
+    async updatePrompt(updatedPrompt: PolishPrompt): Promise<Settings> {
+        return enqueueStorageOp(async () => {
+            const settings = await _getSettingsRecord({ strict: true });
+            const nextPrompts = settings.prompts.map((p) =>
+                p.id === updatedPrompt.id ? updatedPrompt : p,
+            );
+            return _saveSettingsRecord({ ...settings, prompts: nextPrompts });
+        });
+    },
+
+    async deletePrompt(id: string): Promise<Settings> {
+        return enqueueStorageOp(async () => {
+            const settings = await _getSettingsRecord({ strict: true });
+            if (settings.prompts.length <= 1) {
+                throw new Error('Cannot delete the last prompt');
+            }
+            const nextPrompts = settings.prompts.filter((p) => p.id !== id);
+            const nextDefaultTemplate =
+                settings.defaultPolishTemplate === id
+                    ? nextPrompts[0]?.id || 'professional'
+                    : settings.defaultPolishTemplate;
+            return _saveSettingsRecord({
+                ...settings,
+                prompts: nextPrompts,
+                defaultPolishTemplate: nextDefaultTemplate,
+            });
+        });
+    },
+
+    async resetPrompts(): Promise<Settings> {
+        return enqueueStorageOp(async () => {
+            const settings = await _getSettingsRecord({ strict: true });
+            const defaultPrompts = buildDefaultPrompts();
+            const hasCurrentDefault = defaultPrompts.some(
+                (p) => p.id === settings.defaultPolishTemplate,
+            );
+            const nextDefaultTemplate = hasCurrentDefault
+                ? settings.defaultPolishTemplate
+                : defaultPrompts[0]?.id || 'professional';
+            return _saveSettingsRecord({
+                ...settings,
+                prompts: defaultPrompts,
+                defaultPolishTemplate: nextDefaultTemplate,
+            });
+        });
+    },
+};
+
+const ALLOWED_RPC_METHODS = new Set<StorageMutationMethod>(
+    Object.keys(localMutations) as StorageMutationMethod[],
+);
+
+const runMutation = async <M extends StorageMutationMethod>(
+    method: M,
+    args: Parameters<(typeof localMutations)[M]>,
+): Promise<Awaited<ReturnType<(typeof localMutations)[M]>>> => {
+    const webext = getWebExt();
+    if (isEmbeddedFrame() && webext?.runtime?.sendMessage) {
+        let rpcResponse: StorageRpcResponse | undefined;
+        try {
+            rpcResponse = (await webext.runtime.sendMessage({
+                type: STORAGE_RPC_TYPE,
+                method,
+                args,
+            } satisfies StorageRpcMessage)) as StorageRpcResponse | undefined;
+        } catch {
+            // Fall through to local lock execution if no background listener is active.
+        }
+
+        if (rpcResponse && typeof rpcResponse === 'object' && rpcResponse.__polypostStorageRpc) {
+            if (!rpcResponse.ok) {
+                throw new Error(rpcResponse.error || 'Storage operation failed');
+            }
+            return rpcResponse.value as Awaited<ReturnType<(typeof localMutations)[M]>>;
+        }
+    }
+
+    const fn = localMutations[method] as (...fnArgs: unknown[]) => Promise<unknown>;
+    return (await fn(...args)) as Awaited<ReturnType<(typeof localMutations)[M]>>;
+};
+
+export const handleStorageRpcMessage = (
+    message: unknown,
+    sender: chrome.runtime.MessageSender | undefined,
+    sendResponse: (response?: unknown) => void,
+): boolean | undefined => {
+    if (!message || typeof message !== 'object') {
+        return undefined;
+    }
+
+    const candidate = message as Partial<StorageRpcMessage>;
+    if (
+        candidate.type !== STORAGE_RPC_TYPE ||
+        typeof candidate.method !== 'string' ||
+        !ALLOWED_RPC_METHODS.has(candidate.method as StorageMutationMethod) ||
+        !Array.isArray(candidate.args)
+    ) {
+        return undefined;
+    }
+
+    const webext = getWebExt();
+    const extBaseUrl = webext?.runtime?.getURL?.('');
+    if (extBaseUrl && sender?.url && !sender.url.startsWith(extBaseUrl)) {
+        sendResponse({
+            __polypostStorageRpc: true,
+            ok: false,
+            error: 'Unauthorized storage RPC sender',
+        } satisfies StorageRpcResponse);
+        return false;
+    }
+
+    const executor = localMutations[candidate.method as StorageMutationMethod] as (
+        ...args: unknown[]
+    ) => Promise<unknown>;
+
+    executor(...candidate.args)
+        .then((value) => {
+            sendResponse({
+                __polypostStorageRpc: true,
+                ok: true,
+                value,
+            } satisfies StorageRpcResponse);
+        })
+        .catch((error) => {
+            sendResponse({
+                __polypostStorageRpc: true,
+                ok: false,
+                error: error instanceof Error ? error.message : 'Storage operation failed',
+            } satisfies StorageRpcResponse);
+        });
+
+    return true;
+};
+
+/**
+ * WebExtension Storage API wrapper for data persistence.
+ * Includes fallback to localStorage for plain-browser web development.
+ */
+export const storage = {
+    // ============================================
+    // Posts
+    // ============================================
+    async getPosts(): Promise<Post[]> {
+        return _getPosts();
+    },
+
+    async savePosts(posts: Post[]): Promise<void> {
+        return runMutation('savePosts', [posts]);
+    },
+
+    async addPost(post: Post): Promise<void> {
+        return runMutation('addPost', [post]);
+    },
+
+    async updatePost(id: string, updates: Partial<Post>): Promise<void> {
+        return runMutation('updatePost', [id, updates]);
+    },
+
+    async deletePost(id: string): Promise<void> {
+        return runMutation('deletePost', [id]);
+    },
+
+    // ============================================
+    // Variants
+    // ============================================
+    async getVariants(): Promise<Variant[]> {
+        return _getVariants();
+    },
+
+    async saveVariants(variants: Variant[]): Promise<void> {
+        return runMutation('saveVariants', [variants]);
+    },
+
+    async addVariant(variant: Variant): Promise<void> {
+        return runMutation('addVariant', [variant]);
+    },
+
+    async getVariantsByPostId(postId: string): Promise<Variant[]> {
+        const variants = await _getVariants();
+        return variants.filter((v) => v.postId === postId);
+    },
+
+    async deleteVariant(id: string): Promise<void> {
+        return runMutation('deleteVariant', [id]);
+    },
+
+    async updateVariant(id: string, updates: Partial<Variant>): Promise<void> {
+        return runMutation('updateVariant', [id, updates]);
+    },
+
+    // ============================================
+    // Folders
+    // ============================================
+    async getFolders(): Promise<Folder[]> {
+        return _getFolders();
+    },
+
+    async saveFolders(folders: Folder[]): Promise<void> {
+        return runMutation('saveFolders', [folders]);
+    },
+
+    async addFolder(folder: Folder): Promise<void> {
+        return runMutation('addFolder', [folder]);
+    },
+
+    async updateFolder(id: string, updates: Partial<Folder>): Promise<void> {
+        return runMutation('updateFolder', [id, updates]);
+    },
+
+    async deleteFolder(id: string): Promise<void> {
+        return runMutation('deleteFolder', [id]);
+    },
+
     // ============================================
     // Settings
     // ============================================
@@ -411,13 +717,26 @@ export const storage = {
     },
 
     async saveSettings(settings: Settings): Promise<void> {
-        return enqueueStorageOp(() => _saveSettingsRecord(settings));
+        return runMutation('saveSettings', [settings]);
     },
 
-    async updateSettings(updates: Partial<Settings>): Promise<void> {
-        return enqueueStorageOp(async () => {
-            const settings = await _getSettingsRecord({ strict: true });
-            await _saveSettingsRecord({ ...DEFAULT_SETTINGS, ...settings, ...updates });
-        });
+    async updateSettings(updates: Partial<Settings>): Promise<Settings> {
+        return runMutation('updateSettings', [updates]);
+    },
+
+    async addPrompt(prompt: PolishPrompt): Promise<Settings> {
+        return runMutation('addPrompt', [prompt]);
+    },
+
+    async updatePrompt(updatedPrompt: PolishPrompt): Promise<Settings> {
+        return runMutation('updatePrompt', [updatedPrompt]);
+    },
+
+    async deletePrompt(id: string): Promise<Settings> {
+        return runMutation('deletePrompt', [id]);
+    },
+
+    async resetPrompts(): Promise<Settings> {
+        return runMutation('resetPrompts', []);
     },
 };

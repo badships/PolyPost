@@ -47,12 +47,12 @@ npm install
 npm run dev
 ```
 
-按浏览器目标运行开发模式：
+按浏览器目标运行开发模式（`dev:chrome` 启动 Vite/CRXJS 开发服务器；`dev:firefox` 与 `dev:safari` 使用 `vite build --watch` 持续生成可直接加载的完整扩展包）：
 
 ```bash
-npm run dev:chrome
-npm run dev:firefox
-npm run dev:safari
+npm run dev:chrome   # Vite + CRXJS 开发服务器
+npm run dev:firefox  # vite build --watch -> dist/firefox
+npm run dev:safari   # vite build --watch -> dist/safari
 ```
 
 生产构建（含类型检查）：

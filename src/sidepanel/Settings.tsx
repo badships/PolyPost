@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { ArrowLeft, Key, Globe, Palette, Laptop } from 'lucide-react';
 import { Button, Input } from '@/components/ui';
 import { useSettingsStore } from '@/store';
-import type { Language } from '@/types';
+import type { Language, Settings as SettingsType } from '@/types';
 import { LANGUAGE_NAMES, POLISH_TEMPLATE_NAMES } from '@/types';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
@@ -50,30 +50,93 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
 
     const [isSaving, setIsSaving] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
+    const [saveError, setSaveError] = useState<string | null>(null);
+    type AiFormField = 'provider' | 'openaiApiKey' | 'customApiUrl' | 'customApiKey' | 'modelName';
+    const dirtyFieldsRef = useRef<Set<AiFormField>>(new Set());
 
-    // Update local state when store changes (e.g. initial load)
+    const updateFormField = <K extends AiFormField>(field: K, value: (typeof settings)[K]) => {
+        dirtyFieldsRef.current.add(field);
+        setSaveError(null);
+        setSettings((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    // Update local state when store changes unless a field has unsaved local edits
     React.useEffect(() => {
-        setSettings({
-            provider: provider || 'openai',
-            openaiApiKey: openaiApiKey || '',
-            customApiUrl: customApiUrl || '',
-            customApiKey: customApiKey || '',
-            modelName: modelName || '',
-        });
+        setSettings((current) => ({
+            provider: dirtyFieldsRef.current.has('provider')
+                ? current.provider
+                : provider || 'openai',
+            openaiApiKey: dirtyFieldsRef.current.has('openaiApiKey')
+                ? current.openaiApiKey
+                : openaiApiKey || '',
+            customApiUrl: dirtyFieldsRef.current.has('customApiUrl')
+                ? current.customApiUrl
+                : customApiUrl || '',
+            customApiKey: dirtyFieldsRef.current.has('customApiKey')
+                ? current.customApiKey
+                : customApiKey || '',
+            modelName: dirtyFieldsRef.current.has('modelName')
+                ? current.modelName
+                : modelName || '',
+        }));
     }, [provider, openaiApiKey, customApiUrl, customApiKey, modelName]);
 
     const handleSaveSettings = async () => {
         setIsSaving(true);
+        setSaveError(null);
         try {
-            const normalizedModelName = normalizeModelName(settings.modelName);
-            await updateSettings({
-                provider: settings.provider,
-                openaiApiKey: settings.openaiApiKey,
-                customApiUrl: settings.customApiUrl,
-                customApiKey: settings.customApiKey,
-                modelName: normalizedModelName,
+            const storeState = useSettingsStore.getState();
+            const updates: Partial<SettingsType> = {};
+
+            if (
+                dirtyFieldsRef.current.has('provider') ||
+                settings.provider !== (storeState.provider || 'openai')
+            ) {
+                updates.provider = settings.provider;
+            }
+            if (
+                dirtyFieldsRef.current.has('openaiApiKey') ||
+                settings.openaiApiKey !== (storeState.openaiApiKey || '')
+            ) {
+                updates.openaiApiKey = settings.openaiApiKey;
+            }
+            if (
+                dirtyFieldsRef.current.has('customApiUrl') ||
+                settings.customApiUrl !== (storeState.customApiUrl || '')
+            ) {
+                updates.customApiUrl = settings.customApiUrl;
+            }
+            if (
+                dirtyFieldsRef.current.has('customApiKey') ||
+                settings.customApiKey !== (storeState.customApiKey || '')
+            ) {
+                updates.customApiKey = settings.customApiKey;
+            }
+            if (
+                dirtyFieldsRef.current.has('modelName') ||
+                settings.modelName !== (storeState.modelName || '')
+            ) {
+                updates.modelName = normalizeModelName(settings.modelName);
+            }
+
+            if (Object.keys(updates).length > 0) {
+                await updateSettings(updates);
+            }
+            dirtyFieldsRef.current.clear();
+
+            const nextState = useSettingsStore.getState();
+            setSettings({
+                provider: nextState.provider || 'openai',
+                openaiApiKey: nextState.openaiApiKey || '',
+                customApiUrl: nextState.customApiUrl || '',
+                customApiKey: nextState.customApiKey || '',
+                modelName: nextState.modelName || '',
             });
-            setSettings((current) => ({ ...current, modelName: normalizedModelName }));
+        } catch (error) {
+            setSaveError(error instanceof Error ? error.message : 'Failed to save settings');
         } finally {
             setIsSaving(false);
         }
@@ -118,10 +181,10 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                             <select
                                 value={settings.provider}
                                 onChange={(e) =>
-                                    setSettings({
-                                        ...settings,
-                                        provider: e.target.value as 'openai' | 'custom',
-                                    })
+                                    updateFormField(
+                                        'provider',
+                                        e.target.value as 'openai' | 'custom',
+                                    )
                                 }
                                 className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
                             >
@@ -143,10 +206,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                                         type={showApiKey ? 'text' : 'password'}
                                         value={settings.openaiApiKey}
                                         onChange={(e) =>
-                                            setSettings({
-                                                ...settings,
-                                                openaiApiKey: e.target.value,
-                                            })
+                                            updateFormField('openaiApiKey', e.target.value)
                                         }
                                         placeholder={t('settings.apikey.placeholder')}
                                         className="flex-1"
@@ -172,10 +232,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                                         type="text"
                                         value={settings.customApiUrl}
                                         onChange={(e) =>
-                                            setSettings({
-                                                ...settings,
-                                                customApiUrl: e.target.value,
-                                            })
+                                            updateFormField('customApiUrl', e.target.value)
                                         }
                                         placeholder={t('settings.customUrl.placeholder')}
                                     />
@@ -189,10 +246,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                                             type={showApiKey ? 'text' : 'password'}
                                             value={settings.customApiKey}
                                             onChange={(e) =>
-                                                setSettings({
-                                                    ...settings,
-                                                    customApiKey: e.target.value,
-                                                })
+                                                updateFormField('customApiKey', e.target.value)
                                             }
                                             placeholder={t('settings.customKey.placeholder')}
                                             className="flex-1"
@@ -214,17 +268,15 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                             </label>
                             <select
                                 value={selectedModelPreset}
-                                onChange={(e) =>
-                                    setSettings((current) => ({
-                                        ...current,
-                                        modelName:
-                                            e.target.value === CUSTOM_MODEL_OPTION_VALUE
-                                                ? isBuiltInOpenAIModel(current.modelName.trim())
-                                                    ? ''
-                                                    : current.modelName
-                                                : e.target.value,
-                                    }))
-                                }
+                                onChange={(e) => {
+                                    const nextModel =
+                                        e.target.value === CUSTOM_MODEL_OPTION_VALUE
+                                            ? isBuiltInOpenAIModel(settings.modelName.trim())
+                                                ? ''
+                                                : settings.modelName
+                                            : e.target.value;
+                                    updateFormField('modelName', nextModel);
+                                }}
                                 className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
                             >
                                 {OPENAI_MODEL_OPTIONS.map((option) => (
@@ -245,18 +297,19 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                             <Input
                                 type="text"
                                 value={settings.modelName}
-                                onChange={(e) =>
-                                    setSettings({
-                                        ...settings,
-                                        modelName: e.target.value,
-                                    })
-                                }
+                                onChange={(e) => updateFormField('modelName', e.target.value)}
                                 placeholder={t('settings.modelName.placeholder')}
                             />
                             <p className="text-xs text-text-muted mt-2">
                                 {t('settings.modelName.help')}
                             </p>
                         </div>
+
+                        {saveError && (
+                            <p className="text-sm text-red-500" role="alert">
+                                {saveError}
+                            </p>
+                        )}
 
                         <div className="flex justify-end pt-2">
                             <Button onClick={handleSaveSettings} isLoading={isSaving}>
@@ -282,7 +335,13 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                             </label>
                             <select
                                 value={uiLanguage}
-                                onChange={(e) => setUiLanguage(e.target.value as 'en' | 'zh')}
+                                onChange={(e) => {
+                                    void setUiLanguage(e.target.value as 'en' | 'zh').catch(
+                                        (err) => {
+                                            console.error('Failed to save UI language:', err);
+                                        },
+                                    );
+                                }}
                                 className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
                             >
                                 <option value="en">English</option>
@@ -296,7 +355,13 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                             </label>
                             <select
                                 value={defaultLanguage}
-                                onChange={(e) => setDefaultLanguage(e.target.value as Language)}
+                                onChange={(e) => {
+                                    void setDefaultLanguage(e.target.value as Language).catch(
+                                        (err) => {
+                                            console.error('Failed to save default language:', err);
+                                        },
+                                    );
+                                }}
                                 className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
                             >
                                 {Object.entries(LANGUAGE_NAMES).map(([code, name]) => (
@@ -313,7 +378,11 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                             </label>
                             <select
                                 value={defaultPolishTemplate}
-                                onChange={(e) => setDefaultPolishTemplate(e.target.value)}
+                                onChange={(e) => {
+                                    void setDefaultPolishTemplate(e.target.value).catch((err) => {
+                                        console.error('Failed to save default template:', err);
+                                    });
+                                }}
                                 className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
                             >
                                 {promptOptions.map((prompt) => (
