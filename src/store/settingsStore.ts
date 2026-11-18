@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Settings, Language, PolishPrompt, ProviderId } from '@/types';
+import type { Settings, Language, ProviderId } from '@/types';
 import { storage } from '@/services/storage';
 import { buildDefaultPrompts, DEFAULT_SETTINGS } from '@/services/settingsDefaults';
 import {
@@ -25,12 +25,6 @@ interface SettingsState extends Settings {
     setDefaultPolishTemplate: (template: string) => Promise<void>;
     setTheme: (theme: 'dark' | 'light' | 'system') => Promise<void>;
     setUiLanguage: (language: 'en' | 'zh') => Promise<void>;
-
-    // Prompt Actions
-    addPrompt: (prompt: PolishPrompt) => Promise<void>;
-    updatePrompt: (prompt: PolishPrompt) => Promise<void>;
-    deletePrompt: (id: string) => Promise<void>;
-    resetPrompts: () => Promise<void>;
 }
 
 const SETTING_KEYS: (keyof Settings)[] = [
@@ -363,56 +357,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         setUiLanguage: async (language: 'en' | 'zh') => {
             await applySettingsMutation(['uiLanguage'], { uiLanguage: language }, () =>
                 storage.updateSettings({ uiLanguage: language }),
-            );
-        },
-
-        addPrompt: async (prompt: PolishPrompt) => {
-            const { prompts } = get();
-            const exists = prompts.some((p) => p.id === prompt.id);
-            const newPrompts = exists
-                ? prompts.map((p) => (p.id === prompt.id ? prompt : p))
-                : [...prompts, prompt];
-            await applySettingsMutation(['prompts'], { prompts: newPrompts }, () =>
-                storage.addPrompt(prompt),
-            );
-        },
-
-        updatePrompt: async (updatedPrompt: PolishPrompt) => {
-            const { prompts } = get();
-            const newPrompts = prompts.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p));
-            await applySettingsMutation(['prompts'], { prompts: newPrompts }, () =>
-                storage.updatePrompt(updatedPrompt),
-            );
-        },
-
-        deletePrompt: async (id: string) => {
-            const { prompts, defaultPolishTemplate } = get();
-            if (prompts.length <= 1) {
-                throw new Error('Cannot delete the last prompt');
-            }
-            const newPrompts = prompts.filter((p) => p.id !== id);
-            const nextDefaultTemplate =
-                defaultPolishTemplate === id
-                    ? newPrompts[0]?.id || 'professional'
-                    : defaultPolishTemplate;
-            await applySettingsMutation(
-                ['prompts', 'defaultPolishTemplate'],
-                { prompts: newPrompts, defaultPolishTemplate: nextDefaultTemplate },
-                () => storage.deletePrompt(id),
-            );
-        },
-
-        resetPrompts: async () => {
-            const { defaultPolishTemplate } = get();
-            const defaultPrompts = buildDefaultPrompts();
-            const hasCurrentDefault = defaultPrompts.some((p) => p.id === defaultPolishTemplate);
-            const nextDefaultTemplate = hasCurrentDefault
-                ? defaultPolishTemplate
-                : defaultPrompts[0]?.id || 'professional';
-            await applySettingsMutation(
-                ['prompts', 'defaultPolishTemplate'],
-                { prompts: defaultPrompts, defaultPolishTemplate: nextDefaultTemplate },
-                () => storage.resetPrompts(),
             );
         },
     };

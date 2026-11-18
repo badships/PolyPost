@@ -1,10 +1,6 @@
-import type { Post, Variant, Folder, Settings, PolishPrompt } from '@/types';
+import type { Post, Variant, Folder, Settings } from '@/types';
 import { getWebExt } from '@/services/webext';
-import {
-    buildDefaultPrompts,
-    DEFAULT_SETTINGS,
-    normalizeSettings,
-} from '@/services/settingsDefaults';
+import { DEFAULT_SETTINGS, normalizeSettings } from '@/services/settingsDefaults';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -54,11 +50,7 @@ type StorageMutationMethod =
     | 'updateFolder'
     | 'deleteFolder'
     | 'saveSettings'
-    | 'updateSettings'
-    | 'addPrompt'
-    | 'updatePrompt'
-    | 'deletePrompt'
-    | 'resetPrompts';
+    | 'updateSettings';
 
 type StorageRpcMessage = {
     type: typeof STORAGE_RPC_TYPE;
@@ -739,73 +731,6 @@ const localMutations = {
             return _commitSettingsPatch(() => ({ patch: updates }));
         });
     },
-
-    async addPrompt(prompt: PolishPrompt): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            return _commitSettingsPatch((current) => {
-                const exists = current.prompts.some((p) => p.id === prompt.id);
-                const nextPrompts = exists
-                    ? current.prompts.map((p) => (p.id === prompt.id ? prompt : p))
-                    : [...current.prompts, prompt];
-                return {
-                    patch: { prompts: nextPrompts },
-                };
-            });
-        });
-    },
-
-    async updatePrompt(updatedPrompt: PolishPrompt): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            return _commitSettingsPatch((current) => {
-                const exists = current.prompts.some((p) => p.id === updatedPrompt.id);
-                if (!exists) {
-                    throw new Error('Prompt no longer exists');
-                }
-                const nextPrompts = current.prompts.map((p) =>
-                    p.id === updatedPrompt.id ? updatedPrompt : p,
-                );
-                return {
-                    patch: { prompts: nextPrompts },
-                };
-            });
-        });
-    },
-
-    async deletePrompt(id: string): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            return _commitSettingsPatch((current) => {
-                if (current.prompts.length <= 1) {
-                    throw new Error('Cannot delete the last prompt');
-                }
-                const nextPrompts = current.prompts.filter((p) => p.id !== id);
-                const patch: Partial<Settings> = {
-                    prompts: nextPrompts,
-                };
-                if (current.defaultPolishTemplate === id) {
-                    patch.defaultPolishTemplate = nextPrompts[0]?.id || 'professional';
-                }
-                return { patch };
-            });
-        });
-    },
-
-    async resetPrompts(): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            return _commitSettingsPatch((current) => {
-                const defaultPrompts = buildDefaultPrompts();
-                const hasCurrentDefault = defaultPrompts.some(
-                    (p) => p.id === current.defaultPolishTemplate,
-                );
-                const patch: Partial<Settings> = {
-                    prompts: defaultPrompts,
-                };
-                if (!hasCurrentDefault) {
-                    patch.defaultPolishTemplate = defaultPrompts[0]?.id || 'professional';
-                }
-                return { patch };
-            });
-        });
-    },
 };
 
 const ALLOWED_RPC_METHODS = new Set<StorageMutationMethod>(
@@ -985,21 +910,5 @@ export const storage = {
 
     async updateSettings(updates: Partial<Settings>): Promise<Settings> {
         return runMutation('updateSettings', [updates]);
-    },
-
-    async addPrompt(prompt: PolishPrompt): Promise<Settings> {
-        return runMutation('addPrompt', [prompt]);
-    },
-
-    async updatePrompt(updatedPrompt: PolishPrompt): Promise<Settings> {
-        return runMutation('updatePrompt', [updatedPrompt]);
-    },
-
-    async deletePrompt(id: string): Promise<Settings> {
-        return runMutation('deletePrompt', [id]);
-    },
-
-    async resetPrompts(): Promise<Settings> {
-        return runMutation('resetPrompts', []);
     },
 };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ArrowUpRight, ChevronLeft } from 'lucide-react';
 import { Button, Badge } from '@/components/ui';
 import { SourceEditor, VariantsPanel, PolishModal, TranslateModal } from '@/components/editor';
@@ -34,6 +34,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         currentPostId,
         getPostById,
         updatePost,
+        deletePost,
         addVariant,
         selectVariant,
         deselectVariants,
@@ -78,6 +79,9 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
     const editVersionRef = useRef(0);
     const loadedPostIdRef = useRef<string | null>(null);
+    const isNewlyCreatedEmptyRef = useRef(false);
+
+    const defaultTranslateTargets = useMemo<Language[]>(() => [defaultLanguage], [defaultLanguage]);
 
     // Get selected variant content (if any)
     const selectedVariant = variants.find((v) => v.isSelected);
@@ -102,10 +106,15 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     useEffect(() => {
         if (!post) {
             loadedPostIdRef.current = null;
+            isNewlyCreatedEmptyRef.current = false;
             return;
         }
         if (loadedPostIdRef.current !== post.id) {
             loadedPostIdRef.current = post.id;
+            isNewlyCreatedEmptyRef.current =
+                post.status === 'draft' &&
+                !post.sourceContent.trim() &&
+                post.createdAt === post.updatedAt;
             editVersionRef.current += 1;
             contentRef.current = post.sourceContent;
             hasUnsavedChangesRef.current = false;
@@ -149,6 +158,9 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         const contentToSave = contentRef.current;
         try {
             await updatePost(currentPostId, { sourceContent: contentToSave });
+            if (contentToSave.trim()) {
+                isNewlyCreatedEmptyRef.current = false;
+            }
             if (editVersionRef.current === versionAtStart) {
                 hasUnsavedChangesRef.current = false;
                 setHasUnsavedChanges(false);
@@ -189,6 +201,9 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         setIsSaving(true);
         try {
             await updatePost(currentPostId, { sourceContent: contentToSave });
+            if (contentToSave.trim()) {
+                isNewlyCreatedEmptyRef.current = false;
+            }
             if (editVersionRef.current === versionAtStart) {
                 hasUnsavedChangesRef.current = false;
                 setHasUnsavedChanges(false);
@@ -199,6 +214,17 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     };
 
     const handleNavigateBack = async () => {
+        if (
+            currentPostId &&
+            isNewlyCreatedEmptyRef.current &&
+            !contentRef.current.trim() &&
+            variants.length === 0
+        ) {
+            hasUnsavedChangesRef.current = false;
+            await deletePost(currentPostId);
+            onNavigateBack();
+            return;
+        }
         if (hasUnsavedChangesRef.current && currentPostId) {
             await updatePost(currentPostId, { sourceContent: contentRef.current });
         }
@@ -216,9 +242,23 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             text: contentToPublish,
         });
 
-        // Mark as posted after opening intent
+        // Mark as posted after opening intent, syncing any unsaved source content
         if (currentPostId) {
-            updatePost(currentPostId, { status: 'posted' });
+            const versionAtPublish = editVersionRef.current;
+            const hadUnsaved = hasUnsavedChangesRef.current;
+            const contentToSave = contentRef.current;
+            isNewlyCreatedEmptyRef.current = false;
+            void updatePost(
+                currentPostId,
+                hadUnsaved
+                    ? { status: 'posted', sourceContent: contentToSave }
+                    : { status: 'posted' },
+            ).then(() => {
+                if (hadUnsaved && editVersionRef.current === versionAtPublish) {
+                    hasUnsavedChangesRef.current = false;
+                    setHasUnsavedChanges(false);
+                }
+            });
         }
     };
 
@@ -532,7 +572,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 hasSelectedVariant={Boolean(selectedVariant)}
                 selectedVariantLabel={selectedVariantLabel}
                 defaultSourceMode={selectedVariant ? 'selected' : 'source'}
-                defaultTargets={[defaultLanguage]}
+                defaultTargets={defaultTranslateTargets}
                 progress={translationProgress}
             />
         </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Button } from '@/components/ui';
 import type { Language } from '@/types';
 import { LANGUAGE_NAMES } from '@/types';
@@ -47,16 +47,26 @@ export const TranslateModal: React.FC<TranslateModalProps> = ({
     const { t } = useTranslation();
     const [selectedTargets, setSelectedTargets] = useState<Language[]>(defaultTargets || ['zh']);
     const [sourceMode, setSourceMode] = useState<TranslateSourceMode>(defaultSourceMode);
+    const wasOpenRef = useRef(false);
 
     const languages = Object.keys(LANGUAGE_NAMES) as Language[];
 
     useEffect(() => {
         if (!isOpen) {
+            wasOpenRef.current = false;
             return;
         }
 
-        setSourceMode(hasSelectedVariant ? defaultSourceMode : 'source');
-        if (defaultTargets && defaultTargets.length > 0) {
+        const justOpened = !wasOpenRef.current;
+        wasOpenRef.current = true;
+
+        if (!hasSelectedVariant) {
+            setSourceMode('source');
+        } else if (justOpened) {
+            setSourceMode(defaultSourceMode);
+        }
+
+        if (justOpened && defaultTargets && defaultTargets.length > 0) {
             setSelectedTargets(defaultTargets);
         }
     }, [isOpen, hasSelectedVariant, defaultSourceMode, defaultTargets]);
