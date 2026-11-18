@@ -199,9 +199,11 @@ export const TranslateModal: React.FC<TranslateModalProps> = ({
                         leftIcon={<Languages size={14} />}
                         disabled={selectedTargets.length === 0}
                     >
-                        {selectedTargets.length > 1
-                            ? t('editor.translate.submit.multi', selectedTargets.length)
-                            : t('editor.translate.submit', LANGUAGE_NAMES[selectedTargets[0]])}
+                        {selectedTargets.length === 0
+                            ? t('editor.translate')
+                            : selectedTargets.length > 1
+                              ? t('editor.translate.submit.multi', selectedTargets.length)
+                              : t('editor.translate.submit', LANGUAGE_NAMES[selectedTargets[0]])}
                     </Button>
                 </div>
             </div>

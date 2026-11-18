@@ -9,6 +9,38 @@ export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 
 const COMPLETION_TOKEN_LIMIT = 2048;
 
+const sanitizeApiKey = (apiKey: string): string => {
+    let result = '';
+    for (const ch of apiKey) {
+        const code = ch.charCodeAt(0);
+        if ((code >= 0x00 && code <= 0x1f) || code === 0x7f) {
+            continue;
+        }
+        result += ch;
+    }
+    return result.trim();
+};
+
+const extractErrorMessage = (error: unknown, fallback: string): string => {
+    if (error && typeof error === 'object') {
+        const errObj = error as {
+            status?: number;
+            message?: string;
+            error?: { message?: string };
+        };
+        const apiMsg = errObj.error?.message || errObj.message;
+        if (apiMsg) {
+            return errObj.status && !apiMsg.includes(String(errObj.status))
+                ? `${errObj.status}: ${apiMsg}`
+                : apiMsg;
+        }
+    }
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+    return fallback;
+};
+
 const normalizeBaseUrl = (baseURL?: string): string => {
     const trimmed = baseURL?.trim().replace(/\/+$/, '');
     return trimmed || DEFAULT_OPENAI_BASE_URL;
@@ -62,13 +94,14 @@ export class AIService {
     }
 
     private getClient(apiKey: string, baseURL?: string): OpenAI {
+        const cleanKey = sanitizeApiKey(apiKey);
         const resolvedBaseUrl = normalizeBaseUrl(baseURL);
         const useProxyFetch = isCustomApiEndpoint(baseURL);
-        const configKey = `${apiKey}|${resolvedBaseUrl}|${useProxyFetch ? 'proxy' : 'direct'}`;
+        const configKey = `${cleanKey}|${resolvedBaseUrl}|${useProxyFetch ? 'proxy' : 'direct'}`;
 
         if (!this.client || this.clientConfigKey !== configKey) {
             this.client = new OpenAI({
-                apiKey,
+                apiKey: cleanKey,
                 baseURL: resolvedBaseUrl,
                 fetch: useProxyFetch ? proxyFetch : undefined,
                 dangerouslyAllowBrowser: true, // Required for browser extension
@@ -96,12 +129,14 @@ export class AIService {
         model: string;
         system: string;
         userPrompt: string;
+        maxTokens?: number;
         failureMessage: string;
     }): Promise<string> {
+        const cleanKey = sanitizeApiKey(params.apiKey);
         const url = buildAnthropicMessagesUrl(params.baseURL);
         const headers: Record<string, string> = {
             'content-type': 'application/json',
-            'x-api-key': params.apiKey,
+            'x-api-key': cleanKey,
             'anthropic-version': '2023-06-01',
         };
 
@@ -120,7 +155,7 @@ export class AIService {
                 headers,
                 body: JSON.stringify({
                     model: params.model,
-                    max_tokens: COMPLETION_TOKEN_LIMIT,
+                    max_tokens: params.maxTokens ?? COMPLETION_TOKEN_LIMIT,
                     system: params.system,
                     messages: [
                         {
@@ -253,6 +288,55 @@ export class AIService {
     }
 
     /**
+     * Verify API key and model connectivity
+     */
+    async testConnection(params: {
+        apiFormat: ApiFormat;
+        apiKey: string;
+        baseURL?: string;
+        modelName?: string;
+    }): Promise<{ model: string; latencyMs: number }> {
+        const cleanKey = sanitizeApiKey(params.apiKey);
+        if (!cleanKey) {
+            throw new Error('API key is required.');
+        }
+
+        const startedAt = Date.now();
+        const model = normalizeModelName(params.modelName);
+
+        if (params.apiFormat === 'anthropic') {
+            await this.createAnthropicCompletion({
+                apiKey: cleanKey,
+                baseURL: params.baseURL,
+                model,
+                system: 'Reply with OK.',
+                userPrompt: 'Ping',
+                maxTokens: 16,
+                failureMessage: 'Network error while connecting to endpoint.',
+            });
+            return { model, latencyMs: Math.max(1, Date.now() - startedAt) };
+        }
+
+        const client = this.getClient(cleanKey, params.baseURL);
+        const isCustomEndpoint = isCustomApiEndpoint(params.baseURL);
+        try {
+            const response = await client.chat.completions.create({
+                model,
+                messages: [{ role: 'user', content: 'Ping' }],
+                ...(usesMaxCompletionTokens(model, isCustomEndpoint)
+                    ? { max_completion_tokens: 32 }
+                    : { max_tokens: 32 }),
+            });
+            if (!response.choices?.length) {
+                throw new Error('Provider returned no choices.');
+            }
+            return { model, latencyMs: Math.max(1, Date.now() - startedAt) };
+        } catch (error) {
+            throw new Error(extractErrorMessage(error, 'Connection test failed.'));
+        }
+    }
+
+    /**
      * Polish content using specified prompt template
      */
     async polish(
@@ -263,7 +347,8 @@ export class AIService {
         baseURL?: string,
         apiFormat: ApiFormat = 'openai',
     ): Promise<AIResponse> {
-        if (!apiKey) {
+        const cleanKey = sanitizeApiKey(apiKey);
+        if (!cleanKey) {
             throw new Error('API key is required. Please configure it in Settings.');
         }
 
@@ -286,7 +371,7 @@ Rewritten tweet:`;
 
         const generatedContent = await this.runCompletion({
             apiFormat,
-            apiKey,
+            apiKey: cleanKey,
             baseURL,
             modelName,
             system: 'You are a professional social media content writer. Keep the output in the same language as the input. 不要翻译，保持与输入相同语言。Output only the rewritten text, nothing else.',
@@ -312,7 +397,8 @@ Rewritten tweet:`;
         baseURL?: string,
         apiFormat: ApiFormat = 'openai',
     ): Promise<AIResponse> {
-        if (!apiKey) {
+        const cleanKey = sanitizeApiKey(apiKey);
+        if (!cleanKey) {
             throw new Error('API key is required. Please configure it in Settings.');
         }
 
@@ -320,7 +406,7 @@ Rewritten tweet:`;
 
         const translatedContent = await this.runCompletion({
             apiFormat,
-            apiKey,
+            apiKey: cleanKey,
             baseURL,
             modelName,
             system: 'You are a professional translator. Detect the source language automatically and translate to the target language. 请自动识别源语言并翻译成目标语言。Output only the translated text, nothing else.',

@@ -1,7 +1,21 @@
 import React, { useRef, useState } from 'react';
-import { ChevronLeft, Key, Globe, Palette, Sun, Moon, Laptop, Plus, Trash2 } from 'lucide-react';
+import {
+    ChevronLeft,
+    Key,
+    Globe,
+    Palette,
+    Sun,
+    Moon,
+    Laptop,
+    Plus,
+    Trash2,
+    CheckCircle2,
+    AlertCircle,
+} from 'lucide-react';
 import { Button, Input } from '@/components/ui';
 import { useSettingsStore } from '@/store';
+import { aiService } from '@/services/ai';
+import { ensureHostPermission } from '@/services/permissions';
 import type {
     ApiFormat,
     BuiltInProviderId,
@@ -131,8 +145,13 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
     }));
 
     const [isSaving, setIsSaving] = useState(false);
+    const [isTesting, setIsTesting] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [testFeedback, setTestFeedback] = useState<{
+        ok: boolean;
+        message: string;
+    } | null>(null);
     const dirtyFieldsRef = useRef<Set<AiFormField>>(new Set());
     const dirtyBuiltInProvidersRef = useRef<Set<BuiltInProviderId>>(new Set());
     const fieldEditVersionRef = useRef<Record<AiFormField, number>>({
@@ -149,6 +168,7 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
         dirtyFieldsRef.current.add(field);
         fieldEditVersionRef.current[field] += 1;
         setSaveError(null);
+        setTestFeedback(null);
     };
 
     const mergeProviderConfigsFromStore = (
@@ -392,6 +412,73 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
             setSaveError(error instanceof Error ? error.message : 'Failed to save settings');
         } finally {
             setIsSaving(false);
+        }
+    };
+
+    const handleTestConnection = async () => {
+        setTestFeedback(null);
+
+        const isBuiltIn = activeBuiltInProvider !== null && activeBuiltInDef && activeBuiltInConfig;
+        const apiFormat: ApiFormat = isBuiltIn
+            ? activeBuiltInDef.apiFormat
+            : activeCustomChannel?.apiFormat === 'anthropic'
+              ? 'anthropic'
+              : 'openai';
+        const baseUrl = (
+            isBuiltIn ? activeBuiltInDef.baseUrl : activeCustomChannel?.baseUrl || ''
+        ).trim();
+        const apiKey = isBuiltIn ? activeBuiltInConfig.apiKey : activeCustomChannel?.apiKey || '';
+        const modelName = isBuiltIn
+            ? normalizeModelNameForProvider(activeBuiltInProvider, activeBuiltInConfig.modelName)
+            : normalizeModelName(activeCustomChannel?.modelName);
+
+        if (isBuiltIn && !apiKey.trim()) {
+            setTestFeedback({ ok: false, message: t('editor.api_key_missing_openai') });
+            return;
+        }
+        if (!isBuiltIn && (!baseUrl || !apiKey.trim())) {
+            setTestFeedback({ ok: false, message: t('editor.api_key_missing_custom') });
+            return;
+        }
+
+        setIsTesting(true);
+        try {
+            const permissionResult = await ensureHostPermission(baseUrl);
+            if (!permissionResult.granted) {
+                if (permissionResult.reason === 'invalid_url') {
+                    setTestFeedback({ ok: false, message: t('editor.permission.invalid_url') });
+                } else if (permissionResult.reason === 'not_allowed') {
+                    setTestFeedback({
+                        ok: false,
+                        message: t('editor.permission.not_allowed', permissionResult.origin || ''),
+                    });
+                } else {
+                    setTestFeedback({
+                        ok: false,
+                        message: t('editor.permission.denied', permissionResult.origin || ''),
+                    });
+                }
+                return;
+            }
+
+            const result = await aiService.testConnection({
+                apiFormat,
+                apiKey,
+                baseURL: baseUrl,
+                modelName,
+            });
+            setTestFeedback({
+                ok: true,
+                message: t('settings.test.success', result.latencyMs, result.model),
+            });
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : 'Unknown error';
+            setTestFeedback({
+                ok: false,
+                message: t('settings.test.failed', msg),
+            });
+        } finally {
+            setIsTesting(false);
         }
     };
 
@@ -836,7 +923,34 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                                 </p>
                             )}
 
-                            <div className="flex justify-end pt-1">
+                            {testFeedback && (
+                                <div
+                                    className={`flex items-start gap-1.5 px-2.5 py-2 rounded-lg text-[11px] leading-snug border ${
+                                        testFeedback.ok
+                                            ? 'bg-[#00ba7c]/10 border-[#00ba7c]/30 text-[#00ba7c]'
+                                            : 'bg-[#f4212e]/10 border-[#f4212e]/30 text-[#f4212e]'
+                                    }`}
+                                    role={testFeedback.ok ? 'status' : 'alert'}
+                                >
+                                    {testFeedback.ok ? (
+                                        <CheckCircle2 size={13} className="shrink-0 mt-0.5" />
+                                    ) : (
+                                        <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                                    )}
+                                    <span className="break-words">{testFeedback.message}</span>
+                                </div>
+                            )}
+
+                            <div className="flex items-center justify-end gap-2 pt-1">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={handleTestConnection}
+                                    isLoading={isTesting}
+                                >
+                                    {isTesting ? t('settings.testing') : t('settings.test')}
+                                </Button>
                                 <Button size="sm" onClick={handleSaveSettings} isLoading={isSaving}>
                                     {t('settings.save')}
                                 </Button>

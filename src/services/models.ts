@@ -73,7 +73,7 @@ export const BUILTIN_PROVIDERS: Record<BuiltInProviderId, BuiltInProviderDefinit
         apiFormat: 'openai',
         baseUrl: 'https://api.deepseek.com',
         defaultModel: 'deepseek-flash',
-        models: ['deepseek-flash', 'deepseek-v4-pro'],
+        models: ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'],
     },
     qwen: {
         id: 'qwen',
