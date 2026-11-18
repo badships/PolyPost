@@ -5,6 +5,40 @@ export function generateId(): string {
     return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 }
 
+export function resolveEffectiveTheme(theme: 'dark' | 'light' | 'system'): 'dark' | 'light' {
+    if (theme === 'system') {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    return theme;
+}
+
+/**
+ * Apply theme to document root without mismatched CSS transition lag.
+ */
+export function applyThemeToDocument(theme: 'dark' | 'light' | 'system', animate = false): void {
+    if (typeof window === 'undefined' || !window.document) {
+        return;
+    }
+
+    const root = window.document.documentElement;
+    const effective = resolveEffectiveTheme(theme);
+
+    if (!animate) {
+        root.classList.add('theme-switching');
+    }
+
+    root.classList.remove('light', 'dark');
+    root.classList.add(effective);
+    root.style.colorScheme = effective;
+
+    if (!animate) {
+        void root.offsetHeight;
+        window.requestAnimationFrame(() => {
+            root.classList.remove('theme-switching');
+        });
+    }
+}
+
 /**
  * Format timestamp to relative time
  */

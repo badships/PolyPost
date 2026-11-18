@@ -7,27 +7,19 @@ interface BadgeProps {
     className?: string;
 }
 
-export const Badge: React.FC<BadgeProps> = ({
-    children,
-    variant = 'default',
-    color,
-    className = '',
-}) => {
-    const baseStyles = 'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium';
+export const Badge: React.FC<BadgeProps> = ({ children, variant = 'default', className = '' }) => {
+    const baseStyles =
+        'inline-flex items-center px-2 h-5 rounded-full text-[10.5px] font-bold leading-none border';
 
     const variantStyles = {
-        default: 'bg-bg-tertiary text-text-secondary',
-        draft: 'bg-status-draft/20 text-status-draft',
-        posted: 'bg-status-posted/20 text-status-posted',
-        language: 'bg-accent/20 text-accent',
-        tag: 'bg-bg-tertiary text-text-secondary',
+        default: 'bg-bg-secondary border-border-primary text-text-primary',
+        draft: 'bg-bg-secondary border-border-primary text-text-primary',
+        posted: 'bg-status-posted/15 border-status-posted/35 text-status-posted',
+        language: 'bg-accent/10 border-accent/45 text-accent',
+        tag: 'bg-bg-secondary border-border-primary text-text-primary',
     };
 
-    const style = color ? { backgroundColor: `${color}20`, color } : undefined;
-
     return (
-        <span className={`${baseStyles} ${variantStyles[variant]} ${className}`} style={style}>
-            {children}
-        </span>
+        <span className={`${baseStyles} ${variantStyles[variant]} ${className}`}>{children}</span>
     );
 };

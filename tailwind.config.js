@@ -26,9 +26,23 @@ export default {
                 // Status colors
                 'status-draft': 'rgb(var(--status-draft) / <alpha-value>)',
                 'status-posted': 'rgb(var(--status-posted) / <alpha-value>)',
+
+                // X-Native Primary CTA Pill Colors
+                'cta-bg': 'rgb(var(--cta-bg) / <alpha-value>)',
+                'cta-text': 'rgb(var(--cta-text) / <alpha-value>)',
+                'cta-hover': 'rgb(var(--cta-hover) / <alpha-value>)',
             },
             fontFamily: {
-                sans: ['Inter', 'system-ui', 'sans-serif'],
+                sans: [
+                    '-apple-system',
+                    'BlinkMacSystemFont',
+                    '"Segoe UI"',
+                    'Roboto',
+                    '"PingFang SC"',
+                    '"Hiragino Sans GB"',
+                    '"Microsoft YaHei"',
+                    'sans-serif',
+                ],
             },
         },
     },

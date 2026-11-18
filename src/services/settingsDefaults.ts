@@ -75,9 +75,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export const normalizeSettings = (settings?: Partial<Settings> | null): Settings => {
-    const rawPrompts = Array.isArray(settings?.prompts) ? settings.prompts : [];
-    const prompts =
-        rawPrompts.length > 0 ? rawPrompts.map((prompt) => ({ ...prompt })) : buildDefaultPrompts();
+    const prompts = buildDefaultPrompts();
     const requestedDefault =
         settings?.defaultPolishTemplate || DEFAULT_SETTINGS.defaultPolishTemplate;
     const defaultPolishTemplate = prompts.some((prompt) => prompt.id === requestedDefault)

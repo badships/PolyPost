@@ -45,25 +45,25 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
             <div
                 className={`
           relative w-full mx-4 ${sizeStyles[size]}
-          bg-bg-secondary border border-border-primary rounded-xl
-          shadow-2xl animate-in fade-in zoom-in-95 duration-200
+          bg-bg-primary border border-border-primary rounded-2xl
+          shadow-2xl
         `}
             >
                 {/* Header */}
                 {title && (
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-border-primary">
-                        <h2 className="text-lg font-semibold text-text-primary">{title}</h2>
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
+                        <h2 className="text-sm font-bold text-text-primary">{title}</h2>
                         <button
                             onClick={onClose}
-                            className="p-1 rounded-lg hover:bg-bg-tertiary text-text-muted hover:text-text-primary transition-colors"
+                            className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-tertiary text-text-muted hover:text-text-primary transition-colors"
                         >
-                            <X size={20} />
+                            <X size={16} />
                         </button>
                     </div>
                 )}
 
                 {/* Body */}
-                <div className="p-6">{children}</div>
+                <div className="p-4">{children}</div>
             </div>
         </div>
     );

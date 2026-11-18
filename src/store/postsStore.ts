@@ -20,6 +20,7 @@ interface PostsState {
     loadVariants: (postId: string) => Promise<void>;
     addVariant: (variant: Omit<Variant, 'id' | 'createdAt'>) => Promise<Variant>;
     selectVariant: (variantId: string) => Promise<void>;
+    deselectVariants: (postId: string) => Promise<void>;
     deleteVariant: (id: string) => Promise<void>;
 
     // Getters
@@ -126,6 +127,21 @@ export const usePostsStore = create<PostsState>((set, get) => ({
         // Update in storage
         for (const v of updatedVariants.filter((v) => v.postId === variant.postId)) {
             await storage.updateVariant(v.id, { isSelected: v.isSelected });
+        }
+
+        set({ variants: updatedVariants });
+    },
+
+    deselectVariants: async (postId: string) => {
+        const postVariants = get().variants.filter((v) => v.postId === postId && v.isSelected);
+        if (postVariants.length === 0) return;
+
+        const updatedVariants = get().variants.map((v) =>
+            v.postId === postId ? { ...v, isSelected: false } : v,
+        );
+
+        for (const v of postVariants) {
+            await storage.updateVariant(v.id, { isSelected: false });
         }
 
         set({ variants: updatedVariants });

@@ -1,102 +1,35 @@
 import React, { useState } from 'react';
-import { Plus, Pencil, Trash2, X, Save, AlertCircle, MoreHorizontal, Check } from 'lucide-react';
-import { useSettingsStore, useUIStore } from '@/store';
+import {
+    Plus,
+    Pencil,
+    Trash2,
+    X,
+    Save,
+    AlertCircle,
+    Star,
+    Briefcase,
+    Flame,
+    Coffee,
+    Cpu,
+    Smile,
+    Zap,
+    PenTool,
+} from 'lucide-react';
+import { useSettingsStore } from '@/store';
 import { useTranslation, type DictionaryKey } from '@/hooks/useTranslation';
-import { Card, Button, Badge } from '@/components/ui';
+import { Button, Badge } from '@/components/ui';
 import type { PolishPrompt } from '@/types';
 
-// Internal component for Grid View Card
-const PromptCard: React.FC<{
-    prompt: PolishPrompt;
-    isDefault: boolean;
-    onSetDefault: (id: string) => void;
-    onEdit: (prompt: PolishPrompt) => void;
-    onDelete: (id: string) => void;
-    canDelete: boolean;
-    t: (key: DictionaryKey, ...args: (string | number)[]) => string;
-}> = ({ prompt, isDefault, onSetDefault, onEdit, onDelete, canDelete, t }) => {
-    const [showMenu, setShowMenu] = useState(false);
-
-    return (
-        <Card
-            hoverable
-            onClick={() => onEdit(prompt)}
-            className={`p-4 flex flex-col gap-3 relative h-full transition-all duration-200 group ${isDefault ? 'border-accent/40' : ''}`}
-        >
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <span className="font-semibold text-text-primary text-sm">{prompt.name}</span>
-                    {isDefault && (
-                        <Badge
-                            variant="default"
-                            className="!bg-accent !text-white border-transparent py-0 h-5"
-                        >
-                            {t('settings.prompts.default_label')}
-                        </Badge>
-                    )}
-                </div>
-                <div className="relative">
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            setShowMenu(!showMenu);
-                        }}
-                        className="p-1 rounded hover:bg-bg-tertiary text-text-muted"
-                    >
-                        <MoreHorizontal size={16} />
-                    </button>
-                    {showMenu && (
-                        <div
-                            className="absolute right-0 top-full mt-1 w-44 bg-bg-secondary border border-border-primary rounded-lg shadow-lg z-10 py-1"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSetDefault(prompt.id);
-                                    setShowMenu(false);
-                                }}
-                                disabled={isDefault}
-                                className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-bg-tertiary ${isDefault ? 'opacity-50 cursor-not-allowed text-text-muted' : 'text-text-primary'}`}
-                            >
-                                <Check size={14} />
-                                {t('settings.prompts.set_default') || 'Set as Default'}
-                            </button>
-                            <button
-                                onClick={() => {
-                                    onEdit(prompt);
-                                    setShowMenu(false);
-                                }}
-                                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-tertiary"
-                            >
-                                <Pencil size={14} />
-                                {t('settings.prompts.edit')}
-                            </button>
-                            <button
-                                onClick={() => {
-                                    onDelete(prompt.id);
-                                    setShowMenu(false);
-                                }}
-                                disabled={!canDelete}
-                                className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-bg-tertiary ${!canDelete ? 'opacity-50 cursor-not-allowed text-text-muted' : 'text-red-400'}`}
-                            >
-                                <Trash2 size={14} />
-                                {t('settings.prompts.delete')}
-                            </button>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            <p className="text-text-secondary text-sm leading-relaxed font-mono flex-1 line-clamp-6 whitespace-pre-wrap">
-                {prompt.content || prompt.template}
-            </p>
-        </Card>
-    );
+const PROMPT_ICONS: Record<string, React.ReactNode> = {
+    professional: <Briefcase size={13} />,
+    viral: <Flame size={13} />,
+    casual: <Coffee size={13} />,
+    technical: <Cpu size={13} />,
+    emoji: <Smile size={13} />,
+    concise: <Zap size={13} />,
 };
 
-// Internal component for List View Item
-const PromptListItem: React.FC<{
+const PromptStyleCard: React.FC<{
     prompt: PolishPrompt;
     isDefault: boolean;
     onSetDefault: (id: string) => void;
@@ -105,81 +38,83 @@ const PromptListItem: React.FC<{
     canDelete: boolean;
     t: (key: DictionaryKey, ...args: (string | number)[]) => string;
 }> = ({ prompt, isDefault, onSetDefault, onEdit, onDelete, canDelete, t }) => {
-    const [showMenu, setShowMenu] = useState(false);
+    const icon = PROMPT_ICONS[prompt.template] || PROMPT_ICONS[prompt.id] || <PenTool size={13} />;
 
     return (
         <div
             onClick={() => onEdit(prompt)}
-            className="flex items-center gap-4 px-4 py-3 bg-bg-secondary hover:bg-bg-tertiary border border-border-primary rounded-lg transition-colors group cursor-pointer"
+            className={`p-2.5 rounded-xl border flex flex-col gap-1.5 cursor-pointer transition-colors ${
+                isDefault
+                    ? 'border-accent/45 bg-accent/[0.06]'
+                    : 'border-border-primary bg-bg-primary hover:bg-bg-secondary hover:border-border-secondary'
+            }`}
         >
-            <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                    <span className="font-medium text-text-primary text-sm">{prompt.name}</span>
-                    {isDefault && (
-                        <Badge
-                            variant="default"
-                            className="!bg-accent !text-white border-transparent py-0 h-5"
-                        >
-                            {t('settings.prompts.default_label')}
-                        </Badge>
-                    )}
+            <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-6 h-6 rounded-[7px] bg-bg-secondary border border-border-primary text-text-primary flex items-center justify-center shrink-0">
+                        {icon}
+                    </div>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-bold text-text-primary text-[12.5px] truncate">
+                            {prompt.name}
+                        </span>
+                        {isDefault && (
+                            <Badge variant="language" className="shrink-0">
+                                {t('settings.prompts.default_label')}
+                            </Badge>
+                        )}
+                    </div>
                 </div>
-                <div className="text-xs text-text-secondary font-mono mt-1 opacity-70 truncate">
-                    {prompt.content || prompt.template}
+
+                {/* Inline Direct Actions */}
+                <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isDefault) {
+                                onSetDefault(prompt.id);
+                            }
+                        }}
+                        disabled={isDefault}
+                        className={`w-6 h-6 rounded-full inline-flex items-center justify-center transition-colors ${
+                            isDefault
+                                ? 'text-accent cursor-default'
+                                : 'text-text-muted hover:text-text-primary hover:bg-bg-tertiary'
+                        }`}
+                        title={t('settings.prompts.set_default')}
+                        aria-label={t('settings.prompts.set_default')}
+                    >
+                        <Star size={12} className={isDefault ? 'fill-current' : ''} />
+                    </button>
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onEdit(prompt);
+                        }}
+                        className="w-6 h-6 rounded-full inline-flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-tertiary transition-colors"
+                        title={t('settings.prompts.edit')}
+                        aria-label={t('settings.prompts.edit')}
+                    >
+                        <Pencil size={12} />
+                    </button>
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onDelete(prompt.id);
+                        }}
+                        disabled={!canDelete}
+                        className="w-6 h-6 rounded-full inline-flex items-center justify-center text-text-muted hover:text-[#f4212e] hover:bg-[#f4212e]/10 transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
+                        title={t('settings.prompts.delete')}
+                        aria-label={t('settings.prompts.delete')}
+                    >
+                        <Trash2 size={12} />
+                    </button>
                 </div>
             </div>
 
-            <div className="relative">
-                <button
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        setShowMenu(!showMenu);
-                    }}
-                    className="p-1 rounded hover:bg-bg-primary text-text-muted"
-                >
-                    <MoreHorizontal size={16} />
-                </button>
-                {showMenu && (
-                    <div
-                        className="absolute right-0 top-full mt-1 w-44 bg-bg-secondary border border-border-primary rounded-lg shadow-lg z-10 py-1"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onSetDefault(prompt.id);
-                                setShowMenu(false);
-                            }}
-                            disabled={isDefault}
-                            className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-bg-tertiary ${isDefault ? 'opacity-50 cursor-not-allowed text-text-muted' : 'text-text-primary'}`}
-                        >
-                            <Check size={14} />
-                            {t('settings.prompts.set_default') || 'Set as Default'}
-                        </button>
-                        <button
-                            onClick={() => {
-                                onEdit(prompt);
-                                setShowMenu(false);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-tertiary"
-                        >
-                            <Pencil size={14} />
-                            {t('settings.prompts.edit')}
-                        </button>
-                        <button
-                            onClick={() => {
-                                onDelete(prompt.id);
-                                setShowMenu(false);
-                            }}
-                            disabled={!canDelete}
-                            className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-bg-tertiary ${!canDelete ? 'opacity-50 cursor-not-allowed text-text-muted' : 'text-red-400'}`}
-                        >
-                            <Trash2 size={14} />
-                            {t('settings.prompts.delete')}
-                        </button>
-                    </div>
-                )}
-            </div>
+            <p className="text-text-secondary text-[11px] leading-[1.4] font-mono line-clamp-2 whitespace-pre-wrap">
+                {prompt.content || prompt.template}
+            </p>
         </div>
     );
 };
@@ -193,7 +128,6 @@ export const PromptSettings: React.FC = () => {
         defaultPolishTemplate,
         setDefaultPolishTemplate,
     } = useSettingsStore();
-    const { viewMode } = useUIStore();
     const { t } = useTranslation();
     const [isAdding, setIsAdding] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -288,72 +222,66 @@ export const PromptSettings: React.FC = () => {
     const isFormOpen = isAdding || editingId !== null;
 
     return (
-        <div className="h-full flex flex-col">
-            {/* Header: Title + Add Button */}
-            <div className="mb-6 flex items-center justify-between">
-                <div>
-                    <h2 className="text-xl font-bold text-text-primary">
-                        {isFormOpen
-                            ? isAdding
-                                ? t('settings.prompts.add')
-                                : t('settings.prompts.edit')
-                            : t('settings.prompts.title')}
-                    </h2>
-                    <p className="text-sm text-text-muted mt-1">
-                        {!isFormOpen && t('settings.prompts.subtitle')}
-                    </p>
-                </div>
-                {!isFormOpen && (
+        <div className="flex flex-col space-y-3 pb-4">
+            {/* Compact Action Bar */}
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-text-muted truncate">
+                    {isFormOpen
+                        ? isAdding
+                            ? t('settings.prompts.add')
+                            : t('settings.prompts.edit')
+                        : t('settings.prompts.subtitle')}
+                </span>
+                {!isFormOpen ? (
+                    <Button size="sm" leftIcon={<Plus size={14} />} onClick={handleStartAdd}>
+                        {t('settings.prompts.add')}
+                    </Button>
+                ) : (
                     <button
-                        onClick={handleStartAdd}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors text-sm"
+                        onClick={resetForm}
+                        className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-tertiary transition-colors"
+                        aria-label={t('actions.cancel')}
                     >
-                        <Plus size={16} />
-                        <span>{t('settings.prompts.add')}</span>
-                    </button>
-                )}
-                {isFormOpen && (
-                    <button onClick={resetForm} className="text-text-muted hover:text-text-primary">
-                        <X size={18} />
+                        <X size={16} />
                     </button>
                 )}
             </div>
 
             {!isFormOpen && actionError && (
-                <p className="text-sm text-red-500 mb-4" role="alert">
+                <p className="text-xs text-red-500" role="alert">
                     {actionError}
                 </p>
             )}
 
             {/* Edit/Add Form */}
             {isFormOpen ? (
-                <div className="bg-bg-secondary p-4 rounded-lg border border-border-primary animate-in fade-in slide-in-from-bottom-2 flex-1 flex flex-col min-h-0">
-                    <form onSubmit={handleSubmit} className="space-y-4 flex-1 flex flex-col">
+                <div className="bg-bg-secondary p-3 rounded-xl border border-border-primary">
+                    <form onSubmit={handleSubmit} className="space-y-3">
                         <div>
-                            <label className="block text-xs font-medium text-text-muted uppercase mb-1">
+                            <label className="block text-xs font-semibold text-text-secondary mb-1.5">
                                 {t('settings.prompts.form.name')}
                             </label>
                             <input
                                 type="text"
                                 value={formData.name}
                                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                className="w-full bg-bg-primary border border-border-primary rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50 placeholder:text-text-muted/50"
+                                className="w-full h-8 bg-bg-primary border border-border-primary rounded-lg px-3 py-1 text-xs text-text-primary focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent placeholder:text-text-muted/60 transition-colors"
                                 placeholder={t('settings.prompts.form.name')}
                                 required
                             />
                         </div>
 
-                        <div className="flex-1 flex flex-col min-h-0">
-                            <label className="block text-xs font-medium text-text-muted uppercase mb-1">
+                        <div>
+                            <label className="block text-xs font-semibold text-text-secondary mb-1.5">
                                 {t('settings.prompts.form.template')}
                             </label>
-                            <div className="relative flex-1 flex flex-col min-h-0">
+                            <div className="relative">
                                 <textarea
                                     value={formData.content}
                                     onChange={(e) =>
                                         setFormData({ ...formData, content: e.target.value })
                                     }
-                                    className="w-full flex-1 bg-bg-primary border border-border-primary rounded-lg px-3 py-2 text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50 resize-none font-mono text-sm placeholder:text-text-muted/50 min-h-[200px]"
+                                    className="w-full bg-bg-primary border border-border-primary rounded-xl px-3 py-2 text-text-primary focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent resize-none font-mono text-xs leading-relaxed placeholder:text-text-muted/60 min-h-[140px] transition-colors"
                                     placeholder={t('settings.prompts.form.template.placeholder')}
                                     required
                                 />
@@ -362,74 +290,44 @@ export const PromptSettings: React.FC = () => {
                                         size={14}
                                         className="text-text-muted cursor-help"
                                     />
-                                    <div className="absolute right-0 w-64 p-2 bg-bg-secondary rounded shadow-lg border border-border-primary text-xs text-text-secondary invisible group-hover:visible z-10">
+                                    <div className="absolute right-0 w-60 p-2 bg-bg-primary rounded-xl shadow-xl border border-border-primary text-[11px] text-text-secondary invisible group-hover:visible z-10">
                                         {t('settings.prompts.form.placeholder_hint')}
                                     </div>
                                 </div>
                             </div>
                         </div>
+
                         {formError && (
-                            <p className="text-sm text-red-500" role="alert">
+                            <p className="text-xs text-[#f4212e]" role="alert">
                                 {formError}
                             </p>
                         )}
-                        <div className="flex justify-end gap-2 pt-2">
-                            <Button variant="ghost" size="sm" onClick={resetForm}>
+
+                        <div className="flex justify-end gap-2 pt-1">
+                            <Button type="button" variant="ghost" size="sm" onClick={resetForm}>
                                 {t('settings.prompts.form.cancel')}
                             </Button>
-                            <Button type="submit" size="sm" leftIcon={<Save size={16} />}>
+                            <Button type="submit" size="sm" leftIcon={<Save size={13} />}>
                                 {t('settings.prompts.form.save')}
                             </Button>
                         </div>
                     </form>
                 </div>
             ) : (
-                /* Prompts List/Grid */
-                <div
-                    className={
-                        viewMode === 'grid'
-                            ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-6'
-                            : 'flex flex-col gap-2 pb-6'
-                    }
-                >
-                    {prompts.map((prompt) =>
-                        viewMode === 'grid' ? (
-                            <PromptCard
-                                key={prompt.id}
-                                prompt={prompt}
-                                isDefault={prompt.id === defaultPolishTemplate}
-                                onSetDefault={handleSetDefault}
-                                onEdit={handleEdit}
-                                onDelete={handleDelete}
-                                canDelete={prompts.length > 1}
-                                t={t}
-                            />
-                        ) : (
-                            <PromptListItem
-                                key={prompt.id}
-                                prompt={prompt}
-                                isDefault={prompt.id === defaultPolishTemplate}
-                                onSetDefault={handleSetDefault}
-                                onEdit={handleEdit}
-                                onDelete={handleDelete}
-                                canDelete={prompts.length > 1}
-                                t={t}
-                            />
-                        ),
-                    )}
-
-                    {/* Add Button as Card in Grid View */}
-                    {viewMode === 'grid' && (
-                        <button
-                            onClick={handleStartAdd}
-                            className="min-h-[180px] rounded-xl border-2 border-dashed border-border-primary flex flex-col items-center justify-center gap-2 text-text-muted hover:text-text-primary hover:border-accent transition-colors duration-200"
-                        >
-                            <div className="w-12 h-12 rounded-full bg-bg-tertiary flex items-center justify-center">
-                                <Plus size={24} />
-                            </div>
-                            <span className="text-sm">{t('settings.prompts.add')}</span>
-                        </button>
-                    )}
+                /* Compact Monochrome Style Cards Grid */
+                <div className="grid grid-cols-1 min-[640px]:grid-cols-2 gap-2">
+                    {prompts.map((prompt) => (
+                        <PromptStyleCard
+                            key={prompt.id}
+                            prompt={prompt}
+                            isDefault={prompt.id === defaultPolishTemplate}
+                            onSetDefault={handleSetDefault}
+                            onEdit={handleEdit}
+                            onDelete={handleDelete}
+                            canDelete={prompts.length > 1}
+                            t={t}
+                        />
+                    ))}
                 </div>
             )}
         </div>
