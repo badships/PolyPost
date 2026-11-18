@@ -32,74 +32,159 @@ interface PostsState {
     getVariantsByPostId: (postId: string) => Variant[];
 }
 
-export const usePostsStore = create<PostsState>((set, get) => ({
-    posts: [],
-    variants: [],
-    currentPostId: null,
-    newlyCreatedDraft: null,
-    isLoading: false,
+const localBlankDraftIds = new Set<string>();
+const pendingLocalPromotions = new Map<string, Promise<void>>();
+let lastLocalPostTimestamp = 0;
 
-    loadPosts: async () => {
-        set({ isLoading: true });
-        try {
-            const [posts, variants] = await Promise.all([
-                storage.getPosts(),
-                storage.getVariants().catch((variantError) => {
-                    console.warn('Failed to load variants:', variantError);
-                    return [] as Variant[];
-                }),
-            ]);
-            set({ posts, variants, isLoading: false });
-        } catch (error) {
-            console.error('Failed to load posts:', error);
-            set({ isLoading: false });
+const nextLocalPostTimestamp = (minFloor = 0): number => {
+    const next = Math.max(Date.now(), lastLocalPostTimestamp + 1, minFloor + 1);
+    lastLocalPostTimestamp = next;
+    return next;
+};
+
+export const usePostsStore = create<PostsState>((set, get) => {
+    const promoteLocalDraftIfNeeded = async (
+        id: string,
+        updates?: Partial<Post>,
+    ): Promise<boolean> => {
+        const pending = pendingLocalPromotions.get(id);
+        if (pending) {
+            await pending.catch(() => undefined);
         }
-    },
 
-    createPost: async (sourceContent: string, folderId: string | null = null) => {
-        const now = Date.now();
-        const post: Post = {
-            id: generateId(),
-            folderId,
-            sourceContent,
-            status: 'draft',
-            createdAt: now,
-            updatedAt: now,
-        };
+        if (!localBlankDraftIds.has(id)) {
+            return false;
+        }
 
-        await storage.addPost(post);
-        set((state) => ({
-            posts: [...state.posts, post],
-            newlyCreatedDraft: !sourceContent.trim()
-                ? { id: post.id, updatedAt: post.updatedAt }
-                : state.newlyCreatedDraft,
-        }));
-        return post;
-    },
+        const localDraft = get().posts.find((p) => p.id === id);
+        if (!localDraft) {
+            localBlankDraftIds.delete(id);
+            throw new Error('Post no longer exists');
+        }
 
-    updatePost: async (id: string, updates: Partial<Post>) => {
-        await storage.updatePost(id, updates);
-        set((state) => ({
-            posts: state.posts.map((p) =>
-                p.id === id ? { ...p, ...updates, updatedAt: Date.now() } : p,
-            ),
-            newlyCreatedDraft: state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
-        }));
-    },
+        const toPersist: Post = updates
+            ? {
+                  ...localDraft,
+                  ...updates,
+                  updatedAt: nextLocalPostTimestamp(localDraft.updatedAt),
+              }
+            : localDraft;
 
-    deletePost: async (id: string) => {
-        await storage.deletePost(id);
-        set((state) => ({
-            posts: state.posts.filter((p) => p.id !== id),
-            variants: state.variants.filter((v) => v.postId !== id),
-            currentPostId: state.currentPostId === id ? null : state.currentPostId,
-            newlyCreatedDraft: state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
-        }));
-    },
+        const promotionPromise = storage.addPost(toPersist).then(() => {
+            localBlankDraftIds.delete(id);
+            set((state) => ({
+                posts: state.posts.map((p) => (p.id === id ? toPersist : p)),
+                newlyCreatedDraft:
+                    state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
+            }));
+        });
 
-    discardEmptyNewDraft: async (id: string, expectedUpdatedAt: number) => {
-        const deleted = await storage.deleteEmptyDraftIfUnmodified(id, expectedUpdatedAt);
-        if (deleted) {
+        pendingLocalPromotions.set(id, promotionPromise);
+        try {
+            await promotionPromise;
+        } finally {
+            if (pendingLocalPromotions.get(id) === promotionPromise) {
+                pendingLocalPromotions.delete(id);
+            }
+        }
+
+        return true;
+    };
+
+    return {
+        posts: [],
+        variants: [],
+        currentPostId: null,
+        newlyCreatedDraft: null,
+        isLoading: false,
+
+        loadPosts: async () => {
+            set({ isLoading: true });
+            try {
+                const [posts, variants] = await Promise.all([
+                    storage.getPosts(),
+                    storage.getVariants().catch((variantError) => {
+                        console.warn('Failed to load variants:', variantError);
+                        return [] as Variant[];
+                    }),
+                ]);
+                set((state) => {
+                    const storedIds = new Set(posts.map((p) => p.id));
+                    for (const id of Array.from(localBlankDraftIds)) {
+                        if (storedIds.has(id)) {
+                            localBlankDraftIds.delete(id);
+                        }
+                    }
+                    const preservedLocalDrafts = state.posts.filter(
+                        (p) => localBlankDraftIds.has(p.id) && !storedIds.has(p.id),
+                    );
+                    return {
+                        posts: [...posts, ...preservedLocalDrafts],
+                        variants,
+                        isLoading: false,
+                    };
+                });
+            } catch (error) {
+                console.error('Failed to load posts:', error);
+                set({ isLoading: false });
+            }
+        },
+
+        createPost: async (sourceContent: string, folderId: string | null = null) => {
+            const now = nextLocalPostTimestamp();
+            const isBlankDraft = !sourceContent.trim();
+            const post: Post = {
+                id: generateId(),
+                folderId,
+                sourceContent,
+                status: 'draft',
+                createdAt: now,
+                updatedAt: now,
+            };
+
+            if (isBlankDraft) {
+                // Keep new blank drafts local until the first save or variant creation
+                // so another panel cannot open or edit an uncommitted blank draft.
+                localBlankDraftIds.add(post.id);
+            } else {
+                await storage.addPost(post);
+            }
+
+            set((state) => ({
+                posts: [...state.posts, post],
+                newlyCreatedDraft: isBlankDraft
+                    ? { id: post.id, updatedAt: post.updatedAt }
+                    : state.newlyCreatedDraft,
+            }));
+            return post;
+        },
+
+        updatePost: async (id: string, updates: Partial<Post>) => {
+            const promoted = await promoteLocalDraftIfNeeded(id, updates);
+            if (promoted) {
+                return;
+            }
+
+            const savedPost = await storage.updatePost(id, updates);
+            set((state) => ({
+                posts: state.posts.map((p) => (p.id === id ? savedPost : p)),
+                newlyCreatedDraft:
+                    state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
+            }));
+        },
+
+        deletePost: async (id: string) => {
+            const pending = pendingLocalPromotions.get(id);
+            if (pending) {
+                await pending.catch(() => undefined);
+            }
+
+            if (localBlankDraftIds.has(id)) {
+                localBlankDraftIds.delete(id);
+            } else {
+                await storage.deletePost(id);
+            }
+
             set((state) => ({
                 posts: state.posts.filter((p) => p.id !== id),
                 variants: state.variants.filter((v) => v.postId !== id),
@@ -107,126 +192,177 @@ export const usePostsStore = create<PostsState>((set, get) => ({
                 newlyCreatedDraft:
                     state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
             }));
-            return true;
-        }
-        set((state) => ({
-            newlyCreatedDraft: state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
-        }));
-        await get().loadPosts();
-        return false;
-    },
+        },
 
-    clearNewlyCreatedDraft: (id?: string) => {
-        set((state) => ({
-            newlyCreatedDraft:
-                !id || state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
-        }));
-    },
+        discardEmptyNewDraft: async (id: string, expectedUpdatedAt: number) => {
+            const pending = pendingLocalPromotions.get(id);
+            if (pending) {
+                await pending.catch(() => undefined);
+            }
 
-    setCurrentPost: (id: string | null) => {
-        set({ currentPostId: id });
-        if (id) {
-            get().loadVariants(id);
-        }
-    },
+            if (localBlankDraftIds.has(id)) {
+                const state = get();
+                const target = state.posts.find((p) => p.id === id);
+                const hasVariants = state.variants.some((v) => v.postId === id);
+                if (
+                    !target ||
+                    target.status !== 'draft' ||
+                    target.updatedAt !== expectedUpdatedAt ||
+                    target.sourceContent.trim().length > 0 ||
+                    hasVariants
+                ) {
+                    set((s) => ({
+                        newlyCreatedDraft:
+                            s.newlyCreatedDraft?.id === id ? null : s.newlyCreatedDraft,
+                    }));
+                    return false;
+                }
 
-    loadVariants: async (postId: string) => {
-        try {
-            const variants = await storage.getVariantsByPostId(postId);
+                localBlankDraftIds.delete(id);
+                set((s) => ({
+                    posts: s.posts.filter((p) => p.id !== id),
+                    variants: s.variants.filter((v) => v.postId !== id),
+                    currentPostId: s.currentPostId === id ? null : s.currentPostId,
+                    newlyCreatedDraft: s.newlyCreatedDraft?.id === id ? null : s.newlyCreatedDraft,
+                }));
+                return true;
+            }
+
+            const deleted = await storage.deleteEmptyDraftIfUnmodified(id, expectedUpdatedAt);
+            if (deleted) {
+                set((state) => ({
+                    posts: state.posts.filter((p) => p.id !== id),
+                    variants: state.variants.filter((v) => v.postId !== id),
+                    currentPostId: state.currentPostId === id ? null : state.currentPostId,
+                    newlyCreatedDraft:
+                        state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
+                }));
+                return true;
+            }
             set((state) => ({
-                variants: [...state.variants.filter((v) => v.postId !== postId), ...variants],
+                newlyCreatedDraft:
+                    state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
             }));
-        } catch (error) {
-            console.error('Failed to load variants:', error);
-        }
-    },
+            await get().loadPosts();
+            return false;
+        },
 
-    addVariant: async (variantData: Omit<Variant, 'id' | 'createdAt'>) => {
-        const variant: Variant = {
-            ...variantData,
-            id: generateId(),
-            createdAt: Date.now(),
-        };
+        clearNewlyCreatedDraft: (id?: string) => {
+            set((state) => ({
+                newlyCreatedDraft:
+                    !id || state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
+            }));
+        },
 
-        await storage.addVariant(variant);
-        set((state) => ({
-            variants: [...state.variants, variant],
-            newlyCreatedDraft:
-                state.newlyCreatedDraft?.id === variantData.postId ? null : state.newlyCreatedDraft,
-        }));
-        return variant;
-    },
+        setCurrentPost: (id: string | null) => {
+            set({ currentPostId: id });
+            if (id) {
+                get().loadVariants(id);
+            }
+        },
 
-    selectVariant: async (variantId: string) => {
-        const variant = get().variants.find((v) => v.id === variantId);
-        if (!variant) return;
+        loadVariants: async (postId: string) => {
+            try {
+                const variants = await storage.getVariantsByPostId(postId);
+                set((state) => ({
+                    variants: [...state.variants.filter((v) => v.postId !== postId), ...variants],
+                }));
+            } catch (error) {
+                console.error('Failed to load variants:', error);
+            }
+        },
 
-        // Deselect all variants for this post, then select the chosen one
-        const updatedVariants = get().variants.map((v) =>
-            v.postId === variant.postId ? { ...v, isSelected: v.id === variantId } : v,
-        );
+        addVariant: async (variantData: Omit<Variant, 'id' | 'createdAt'>) => {
+            await promoteLocalDraftIfNeeded(variantData.postId);
 
-        // Update in storage
-        for (const v of updatedVariants.filter((v) => v.postId === variant.postId)) {
-            await storage.updateVariant(v.id, { isSelected: v.isSelected });
-        }
+            const variant: Variant = {
+                ...variantData,
+                id: generateId(),
+                createdAt: Date.now(),
+            };
 
-        set({ variants: updatedVariants });
-    },
+            await storage.addVariant(variant);
+            set((state) => ({
+                variants: [...state.variants, variant],
+                newlyCreatedDraft:
+                    state.newlyCreatedDraft?.id === variantData.postId
+                        ? null
+                        : state.newlyCreatedDraft,
+            }));
+            return variant;
+        },
 
-    deselectVariants: async (postId: string) => {
-        const postVariants = get().variants.filter((v) => v.postId === postId && v.isSelected);
-        if (postVariants.length === 0) return;
+        selectVariant: async (variantId: string) => {
+            const variant = get().variants.find((v) => v.id === variantId);
+            if (!variant) return;
 
-        const updatedVariants = get().variants.map((v) =>
-            v.postId === postId ? { ...v, isSelected: false } : v,
-        );
+            // Deselect all variants for this post, then select the chosen one
+            const updatedVariants = get().variants.map((v) =>
+                v.postId === variant.postId ? { ...v, isSelected: v.id === variantId } : v,
+            );
 
-        for (const v of postVariants) {
-            await storage.updateVariant(v.id, { isSelected: false });
-        }
+            // Update in storage
+            for (const v of updatedVariants.filter((v) => v.postId === variant.postId)) {
+                await storage.updateVariant(v.id, { isSelected: v.isSelected });
+            }
 
-        set({ variants: updatedVariants });
-    },
+            set({ variants: updatedVariants });
+        },
 
-    deleteVariant: async (id: string) => {
-        await storage.deleteVariant(id);
-        set((state) => ({
-            variants: state.variants.filter((v) => v.id !== id),
-        }));
-    },
+        deselectVariants: async (postId: string) => {
+            const postVariants = get().variants.filter((v) => v.postId === postId && v.isSelected);
+            if (postVariants.length === 0) return;
 
-    getPostById: (id: string) => {
-        return get().posts.find((p) => p.id === id);
-    },
+            const updatedVariants = get().variants.map((v) =>
+                v.postId === postId ? { ...v, isSelected: false } : v,
+            );
 
-    getPostsByFilter: (filter: LibraryFilter, folderId?: string | null) => {
-        let posts = get().posts;
+            for (const v of postVariants) {
+                await storage.updateVariant(v.id, { isSelected: false });
+            }
 
-        // Filter by folder
-        if (folderId !== undefined) {
-            posts = posts.filter((p) => p.folderId === folderId);
-        }
+            set({ variants: updatedVariants });
+        },
 
-        // Filter by status
-        const statusMap: Record<LibraryFilter, PostStatus | null> = {
-            all: null,
-            drafts: 'draft',
-            posted: 'posted',
-        };
+        deleteVariant: async (id: string) => {
+            await storage.deleteVariant(id);
+            set((state) => ({
+                variants: state.variants.filter((v) => v.id !== id),
+            }));
+        },
 
-        const status = statusMap[filter];
-        if (status) {
-            posts = posts.filter((p) => p.status === status);
-        }
+        getPostById: (id: string) => {
+            return get().posts.find((p) => p.id === id);
+        },
 
-        // Sort by updatedAt descending without mutating store state
-        return [...posts].sort((a, b) => b.updatedAt - a.updatedAt);
-    },
+        getPostsByFilter: (filter: LibraryFilter, folderId?: string | null) => {
+            let posts = get().posts;
 
-    getVariantsByPostId: (postId: string) => {
-        return get()
-            .variants.filter((v) => v.postId === postId)
-            .sort((a, b) => b.createdAt - a.createdAt);
-    },
-}));
+            // Filter by folder
+            if (folderId !== undefined) {
+                posts = posts.filter((p) => p.folderId === folderId);
+            }
+
+            // Filter by status
+            const statusMap: Record<LibraryFilter, PostStatus | null> = {
+                all: null,
+                drafts: 'draft',
+                posted: 'posted',
+            };
+
+            const status = statusMap[filter];
+            if (status) {
+                posts = posts.filter((p) => p.status === status);
+            }
+
+            // Sort by updatedAt descending without mutating store state
+            return [...posts].sort((a, b) => b.updatedAt - a.updatedAt);
+        },
+
+        getVariantsByPostId: (postId: string) => {
+            return get()
+                .variants.filter((v) => v.postId === postId)
+                .sort((a, b) => b.createdAt - a.createdAt);
+        },
+    };
+});

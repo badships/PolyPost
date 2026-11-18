@@ -7,8 +7,18 @@ import { normalizeModelName, supportsCustomTemperature, usesMaxCompletionTokens 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 export const TEST_CONNECTION_TIMEOUT_MS = 10_000;
+export const COMPLETION_TIMEOUT_MS = 120_000;
 
 const COMPLETION_TOKEN_LIMIT = 2048;
+const MAX_ERROR_DEPTH = 4;
+const KNOWN_ERROR_FIELDS = [
+    'error',
+    'message',
+    'detail',
+    'error_description',
+    'title',
+    'reason',
+] as const;
 
 const sanitizeApiKey = (apiKey: string): string => {
     let result = '';
@@ -34,7 +44,11 @@ const stripControlChars = (value: string): string => {
     return result.trim();
 };
 
-const toSafeErrorText = (value: unknown): string => {
+const extractKnownErrorText = (
+    value: unknown,
+    depth = 0,
+    seen: Set<unknown> = new Set(),
+): string => {
     if (typeof value === 'string') {
         return value;
     }
@@ -44,31 +58,40 @@ const toSafeErrorText = (value: unknown): string => {
     if (typeof value === 'number' || typeof value === 'boolean') {
         return String(value);
     }
-    if (typeof value === 'object') {
-        const obj = value as { error?: unknown; message?: unknown; detail?: unknown };
-        if (obj.error !== undefined && obj.error !== value) {
-            const nested = toSafeErrorText(obj.error);
-            if (nested) return nested;
+    if (typeof value !== 'object' || seen.has(value) || depth >= MAX_ERROR_DEPTH) {
+        return '';
+    }
+
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const nested = extractKnownErrorText(item, depth + 1, seen);
+            if (nested) {
+                return nested;
+            }
         }
-        if (obj.message !== undefined && obj.message !== value) {
-            const nested = toSafeErrorText(obj.message);
-            if (nested) return nested;
-        }
-        if (obj.detail !== undefined && obj.detail !== value) {
-            const nested = toSafeErrorText(obj.detail);
-            if (nested) return nested;
-        }
-        if (value instanceof Error && typeof value.message === 'string') {
-            return value.message;
-        }
-        try {
-            return JSON.stringify(value);
-        } catch {
-            return '';
+        return '';
+    }
+
+    const record = value as Record<string, unknown>;
+    for (const key of KNOWN_ERROR_FIELDS) {
+        if (record[key] !== undefined && record[key] !== value) {
+            const nested = extractKnownErrorText(record[key], depth + 1, seen);
+            if (nested) {
+                return nested;
+            }
         }
     }
+
+    if (value instanceof Error && typeof value.message === 'string' && value.message) {
+        return value.message;
+    }
+
     return '';
 };
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export const sanitizeProviderErrorMessage = (
     raw: unknown,
@@ -82,25 +105,54 @@ export const sanitizeProviderErrorMessage = (
             ? (raw as { status: number }).status
             : undefined);
 
-    let message = stripControlChars(toSafeErrorText(raw));
+    let message = stripControlChars(extractKnownErrorText(raw));
     if (!message) {
         message = rawStatus ? `Request failed with status ${rawStatus}` : fallback;
     }
 
     const candidates = new Set<string>();
+    const addSecretVariants = (secret: string): void => {
+        if (!secret) {
+            return;
+        }
+        candidates.add(secret);
+        try {
+            const jsonEscaped = JSON.stringify(secret).slice(1, -1);
+            if (jsonEscaped) {
+                candidates.add(jsonEscaped);
+            }
+        } catch {
+            // Ignore unserializable sequences
+        }
+        try {
+            const uriEncoded = encodeURIComponent(secret);
+            if (uriEncoded) {
+                candidates.add(uriEncoded);
+            }
+        } catch {
+            // Ignore malformed surrogate sequences
+        }
+    };
+
     if (typeof apiKey === 'string') {
-        const trimmed = apiKey.trim();
-        const cleaned = sanitizeApiKey(apiKey);
-        if (trimmed.length >= 4) candidates.add(trimmed);
-        if (cleaned.length >= 4) candidates.add(cleaned);
-    }
-    for (const secret of candidates) {
-        message = message.split(secret).join('[REDACTED]');
+        addSecretVariants(apiKey.trim());
+        addSecretVariants(sanitizeApiKey(apiKey));
     }
 
-    message = message
-        .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
-        .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{6,}\b/g, '[REDACTED]');
+    const sortedCandidates = [...candidates].sort((a, b) => b.length - a.length);
+    const longCandidates = sortedCandidates.filter((item) => item.length >= 4);
+    const shortCandidates = sortedCandidates.filter((item) => item.length < 4);
+
+    const redactorParts: string[] = [
+        String.raw`\b[Bb][Ee][Aa][Rr][Ee][Rr][ \t]+[^\s,;)"'}\]]+`,
+        ...longCandidates.map(escapeRegExp),
+        String.raw`\b(?:[Ss][Kk]|[Rr][Kk]|[Pp][Kk])-[A-Za-z0-9._~+/=-]{2,}`,
+        ...shortCandidates.map(escapeRegExp),
+    ];
+    const redactor = new RegExp(redactorParts.join('|'), 'g');
+    message = message.replace(redactor, (match) =>
+        /^bearer[ \t]+/i.test(match) ? 'Bearer [REDACTED]' : '[REDACTED]',
+    );
 
     if (message.length > 240) {
         message = `${message.slice(0, 237)}...`;
@@ -152,31 +204,65 @@ const isValidOpenAIProbeResponse = (data: unknown): boolean => {
     );
 };
 
+const isValidAnthropicContentBlock = (block: unknown): boolean => {
+    if (!block || typeof block !== 'object' || Array.isArray(block)) {
+        return false;
+    }
+    const b = block as {
+        type?: unknown;
+        text?: unknown;
+        thinking?: unknown;
+        data?: unknown;
+        id?: unknown;
+        name?: unknown;
+        input?: unknown;
+    };
+    switch (b.type) {
+        case 'text':
+            return typeof b.text === 'string';
+        case 'thinking':
+            return typeof b.thinking === 'string';
+        case 'redacted_thinking':
+            return typeof b.data === 'string';
+        case 'tool_use':
+        case 'server_tool_use':
+            return (
+                typeof b.id === 'string' &&
+                typeof b.name === 'string' &&
+                Boolean(b.input && typeof b.input === 'object' && !Array.isArray(b.input))
+            );
+        default:
+            return false;
+    }
+};
+
 const isValidAnthropicProbeResponse = (data: unknown): boolean => {
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
         return false;
     }
-    const obj = data as { error?: unknown; content?: unknown };
+    const obj = data as {
+        error?: unknown;
+        type?: unknown;
+        role?: unknown;
+        stop_reason?: unknown;
+        content?: unknown;
+    };
     if (obj.error) {
         return false;
     }
-    if (Array.isArray(obj.content) && obj.content.length > 0) {
-        return obj.content.every((block) => {
-            if (!block || typeof block !== 'object') {
-                return false;
-            }
-            const b = block as { type?: unknown; text?: unknown; thinking?: unknown };
-            if (typeof b.type !== 'string') {
-                return false;
-            }
-            if (b.type === 'text') {
-                return typeof b.text === 'string';
-            }
-            if (b.type === 'thinking') {
-                return typeof b.thinking === 'string';
-            }
-            return true;
-        });
+    if (obj.type !== undefined && obj.type !== 'message') {
+        return false;
+    }
+    if (obj.role !== undefined && obj.role !== 'assistant') {
+        return false;
+    }
+    if (Array.isArray(obj.content)) {
+        if (obj.content.length > 0) {
+            return obj.content.every(isValidAnthropicContentBlock);
+        }
+        return (
+            obj.type === 'message' && obj.role === 'assistant' && obj.stop_reason === 'max_tokens'
+        );
     }
     return isValidOpenAIProbeResponse(data);
 };
@@ -217,18 +303,58 @@ const isCustomApiEndpoint = (baseURL?: string): boolean => {
     }
 };
 
-const noRedirectDirectFetch: typeof fetch = (input, init) => {
-    return fetch(input, {
-        ...init,
-        redirect: init?.redirect ?? 'error',
-    });
+const parseJsonSafely = (rawBody: string): unknown => {
+    if (!rawBody) {
+        return null;
+    }
+    try {
+        return JSON.parse(rawBody);
+    } catch {
+        return null;
+    }
 };
 
-const noRedirectProxyFetch: typeof fetch = (input, init) => {
-    return proxyFetch(input, {
-        ...init,
-        redirect: init?.redirect ?? 'error',
-    });
+const buildSanitizedHttpError = async (response: Response, apiKey?: string): Promise<Error> => {
+    const rawBody = await response.text();
+    const parsed = parseJsonSafely(rawBody);
+    return new Error(
+        sanitizeProviderErrorMessage(
+            parsed ?? (rawBody || response.statusText),
+            apiKey,
+            response.status,
+            `Request failed with status ${response.status}`,
+        ),
+    );
+};
+
+const createScopedFetch = (options: {
+    useProxy: boolean;
+    deadlineAt: number;
+    apiKey?: string;
+    surfaceHttpError?: boolean;
+    onHttpError?: (error: Error) => void;
+}): typeof fetch => {
+    return async (input, init) => {
+        const scopedInit: ProxyFetchInit = {
+            ...init,
+            redirect: 'error',
+            deadlineAt: options.deadlineAt,
+            forceDirect: !options.useProxy,
+        };
+        const response = await proxyFetch(input, scopedInit);
+        if (options.surfaceHttpError && !response.ok) {
+            const httpError = await buildSanitizedHttpError(response, options.apiKey);
+            options.onHttpError?.(httpError);
+            // Return an OpenAI-shaped JSON error body rather than rejecting inside fetch,
+            // because OpenAI SDK wraps any rejection thrown by fetch into APIConnectionError.
+            return new Response(JSON.stringify({ error: { message: httpError.message } }), {
+                status: response.status,
+                statusText: response.statusText,
+                headers: { 'content-type': 'application/json' },
+            });
+        }
+        return response;
+    };
 };
 
 interface AIResponse {
@@ -240,29 +366,8 @@ interface AIResponse {
  * AI Service for content polishing and translation
  */
 export class AIService {
-    private client: OpenAI | null = null;
-    private clientConfigKey: string | null = null;
-
     private getLanguageGuardrail(): string {
         return '请保持输出与输入语言一致，不要翻译。Keep the output in the same language as the input. Do not translate.';
-    }
-
-    private getClient(apiKey: string, baseURL?: string): OpenAI {
-        const cleanKey = sanitizeApiKey(apiKey);
-        const resolvedBaseUrl = normalizeBaseUrl(baseURL);
-        const useProxyFetch = isCustomApiEndpoint(baseURL);
-        const configKey = `${cleanKey}|${resolvedBaseUrl}|${useProxyFetch ? 'proxy' : 'direct'}`;
-
-        if (!this.client || this.clientConfigKey !== configKey) {
-            this.client = new OpenAI({
-                apiKey: cleanKey,
-                baseURL: resolvedBaseUrl,
-                fetch: useProxyFetch ? noRedirectProxyFetch : noRedirectDirectFetch,
-                dangerouslyAllowBrowser: true, // Required for browser extension
-            });
-            this.clientConfigKey = configKey;
-        }
-        return this.client;
     }
 
     private extractCompletionText(response: OpenAI.Chat.Completions.ChatCompletion): string {
@@ -285,6 +390,7 @@ export class AIService {
         userPrompt: string;
         maxTokens?: number;
         timeoutMs?: number;
+        deadlineAt?: number;
         signal?: AbortSignal;
         failureMessage: string;
     }): Promise<any> {
@@ -304,6 +410,12 @@ export class AIService {
             // Allow proxyFetch to surface URL validation errors if malformed.
         }
 
+        const resolvedDeadlineAt =
+            params.deadlineAt ??
+            (typeof params.timeoutMs === 'number' && params.timeoutMs > 0
+                ? Date.now() + params.timeoutMs
+                : Date.now() + COMPLETION_TIMEOUT_MS);
+
         let response: Response;
         try {
             const requestInit: ProxyFetchInit = {
@@ -311,7 +423,7 @@ export class AIService {
                 headers,
                 redirect: 'error',
                 signal: params.signal,
-                timeoutMs: params.timeoutMs,
+                deadlineAt: resolvedDeadlineAt,
                 body: JSON.stringify({
                     model: params.model,
                     max_tokens: params.maxTokens ?? COMPLETION_TOKEN_LIMIT,
@@ -327,34 +439,21 @@ export class AIService {
             response = await proxyFetch(url, requestInit);
         } catch (error) {
             console.error('Anthropic request error:', error);
-            if (params.signal?.aborted) {
-                throw new Error('Connection test timed out.');
+            if (error instanceof Error && error.message === 'Request timed out') {
+                throw error;
+            }
+            if (error instanceof Error && error.name === 'AbortError') {
+                throw error;
             }
             throw new Error(params.failureMessage);
         }
 
-        const rawBody = await response.text();
-        let data: any = null;
-        if (rawBody) {
-            try {
-                data = JSON.parse(rawBody);
-            } catch {
-                data = null;
-            }
-        }
-
         if (!response.ok) {
-            throw new Error(
-                sanitizeProviderErrorMessage(
-                    data ?? rawBody,
-                    params.apiKey,
-                    response.status,
-                    `Request failed with status ${response.status}`,
-                ),
-            );
+            throw await buildSanitizedHttpError(response, params.apiKey);
         }
 
-        return data;
+        const rawBody = await response.text();
+        return parseJsonSafely(rawBody);
     }
 
     private async createAnthropicCompletion(params: {
@@ -366,7 +465,29 @@ export class AIService {
         maxTokens?: number;
         failureMessage: string;
     }): Promise<string> {
-        const data = await this.sendAnthropicRequest(params);
+        const controller = new AbortController();
+        const deadlineAt = Date.now() + COMPLETION_TIMEOUT_MS;
+        const timeoutId = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
+
+        let data: any;
+        try {
+            data = await this.sendAnthropicRequest({
+                ...params,
+                timeoutMs: COMPLETION_TIMEOUT_MS,
+                deadlineAt,
+                signal: controller.signal,
+            });
+        } catch (error) {
+            if (
+                controller.signal.aborted ||
+                (error instanceof Error && error.message === 'Request timed out')
+            ) {
+                throw new Error(params.failureMessage);
+            }
+            throw error;
+        } finally {
+            clearTimeout(timeoutId);
+        }
 
         if (data?.stop_reason === 'max_tokens') {
             throw new Error('AI response was truncated before completion. Please try again.');
@@ -403,32 +524,56 @@ export class AIService {
         temperature: number;
         failureMessage: string;
     }): Promise<string> {
-        const client = this.getClient(params.apiKey, params.baseURL);
+        const cleanKey = sanitizeApiKey(params.apiKey);
+        const deadlineAt = Date.now() + COMPLETION_TIMEOUT_MS;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
+        const isCustomEndpoint = isCustomApiEndpoint(params.baseURL);
+        const client = new OpenAI({
+            apiKey: cleanKey,
+            baseURL: normalizeBaseUrl(params.baseURL),
+            fetch: createScopedFetch({
+                useProxy: isCustomEndpoint,
+                deadlineAt,
+            }),
+            maxRetries: 0,
+            timeout: COMPLETION_TIMEOUT_MS,
+            dangerouslyAllowBrowser: true,
+        });
+
         let response: OpenAI.Chat.Completions.ChatCompletion;
         try {
-            const isCustomEndpoint = isCustomApiEndpoint(params.baseURL);
-            response = await client.chat.completions.create({
-                model: params.model,
-                messages: [
-                    {
-                        role: 'system',
-                        content: params.system,
-                    },
-                    {
-                        role: 'user',
-                        content: params.userPrompt,
-                    },
-                ],
-                ...(usesMaxCompletionTokens(params.model, isCustomEndpoint)
-                    ? { max_completion_tokens: COMPLETION_TOKEN_LIMIT }
-                    : { max_tokens: COMPLETION_TOKEN_LIMIT }),
-                ...(supportsCustomTemperature(params.model)
-                    ? { temperature: params.temperature }
-                    : {}),
-            });
+            response = await client.chat.completions.create(
+                {
+                    model: params.model,
+                    messages: [
+                        {
+                            role: 'system',
+                            content: params.system,
+                        },
+                        {
+                            role: 'user',
+                            content: params.userPrompt,
+                        },
+                    ],
+                    ...(usesMaxCompletionTokens(params.model, isCustomEndpoint)
+                        ? { max_completion_tokens: COMPLETION_TOKEN_LIMIT }
+                        : { max_tokens: COMPLETION_TOKEN_LIMIT }),
+                    ...(supportsCustomTemperature(params.model)
+                        ? { temperature: params.temperature }
+                        : {}),
+                },
+                {
+                    maxRetries: 0,
+                    timeout: COMPLETION_TIMEOUT_MS,
+                    signal: controller.signal,
+                },
+            );
         } catch (error) {
             console.error('OpenAI request error:', error);
             throw new Error(params.failureMessage);
+        } finally {
+            clearTimeout(timeoutId);
         }
 
         return this.extractCompletionText(response);
@@ -487,9 +632,11 @@ export class AIService {
                 ? params.timeoutMs
                 : TEST_CONNECTION_TIMEOUT_MS;
         const startedAt = Date.now();
+        const deadlineAt = startedAt + timeoutMs;
         const model = normalizeModelName(params.modelName);
         const controller = new AbortController();
         let timedOut = false;
+        let capturedHttpError: Error | null = null;
         const timeoutId = setTimeout(() => {
             timedOut = true;
             controller.abort();
@@ -505,6 +652,7 @@ export class AIService {
                     userPrompt: 'Ping',
                     maxTokens: 64,
                     timeoutMs,
+                    deadlineAt,
                     signal: controller.signal,
                     failureMessage: 'Network error while connecting to endpoint.',
                 });
@@ -515,18 +663,18 @@ export class AIService {
             }
 
             const isCustomEndpoint = isCustomApiEndpoint(params.baseURL);
-            const probeFetch: typeof fetch = (input, init) => {
-                const probeInit: ProxyFetchInit = {
-                    ...init,
-                    redirect: 'error',
-                    timeoutMs,
-                };
-                return isCustomEndpoint ? proxyFetch(input, probeInit) : fetch(input, probeInit);
-            };
             const probeClient = new OpenAI({
                 apiKey: cleanKey,
                 baseURL: normalizeBaseUrl(params.baseURL),
-                fetch: probeFetch,
+                fetch: createScopedFetch({
+                    useProxy: isCustomEndpoint,
+                    deadlineAt,
+                    apiKey: params.apiKey,
+                    surfaceHttpError: true,
+                    onHttpError: (err) => {
+                        capturedHttpError = err;
+                    },
+                }),
                 maxRetries: 0,
                 timeout: timeoutMs,
                 dangerouslyAllowBrowser: true,
@@ -551,8 +699,19 @@ export class AIService {
             }
             return { model, latencyMs: Math.max(1, Date.now() - startedAt) };
         } catch (error) {
-            if (timedOut) {
+            const cause =
+                error && typeof error === 'object'
+                    ? (error as { cause?: unknown }).cause
+                    : undefined;
+            if (
+                timedOut ||
+                (error instanceof Error && error.message === 'Request timed out') ||
+                (cause instanceof Error && cause.message === 'Request timed out')
+            ) {
                 throw new Error('Connection test timed out.');
+            }
+            if (capturedHttpError) {
+                throw capturedHttpError;
             }
             throw new Error(
                 sanitizeProviderErrorMessage(

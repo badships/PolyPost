@@ -2,18 +2,25 @@ import { getWebExt } from '@/services/webext';
 
 export type ProxyFetchInit = RequestInit & {
     timeoutMs?: number;
+    deadlineAt?: number;
+    forceDirect?: boolean;
 };
 
 type ProxyFetchRequest = {
     type: 'proxyFetch';
+    requestId: string;
     url: string;
     init?: {
         method?: string;
         headers?: Record<string, string>;
         body?: string;
-        redirect?: RequestRedirect;
-        timeoutMs?: number;
+        deadlineAt?: number;
     };
+};
+
+type ProxyFetchCancelRequest = {
+    type: 'proxyFetchCancel';
+    requestId: string;
 };
 
 const createAbortError = (message = 'The operation was aborted.'): Error => {
@@ -22,10 +29,19 @@ const createAbortError = (message = 'The operation was aborted.'): Error => {
     return error;
 };
 
+const createRequestId = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return `pf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+};
+
 type ProxyFetchResponse = {
     ok: boolean;
     status: number;
     statusText: string;
+    aborted?: boolean;
+    timedOut?: boolean;
     headers: Record<string, string>;
     body: string;
 };
@@ -86,7 +102,9 @@ const readBody = async (
     return undefined;
 };
 
-const sendProxyFetch = (payload: ProxyFetchRequest): Promise<ProxyFetchResponse> => {
+const sendRuntimeMessage = <TResponse = unknown>(
+    payload: ProxyFetchRequest | ProxyFetchCancelRequest,
+): Promise<TResponse> => {
     const webext = getWebExt();
     if (!webext?.runtime?.sendMessage) {
         return Promise.reject(
@@ -96,8 +114,8 @@ const sendProxyFetch = (payload: ProxyFetchRequest): Promise<ProxyFetchResponse>
 
     const g = globalThis as any;
     if (g.browser?.runtime?.sendMessage) {
-        return (g.browser.runtime.sendMessage(payload) as Promise<ProxyFetchResponse>).catch(
-            (error) => Promise.reject(error),
+        return (g.browser.runtime.sendMessage(payload) as Promise<TResponse>).catch((error) =>
+            Promise.reject(error),
         );
     }
 
@@ -109,12 +127,19 @@ const sendProxyFetch = (payload: ProxyFetchRequest): Promise<ProxyFetchResponse>
                     return;
                 }
 
-                resolve(response as ProxyFetchResponse);
+                resolve(response as TResponse);
             });
         } catch (error) {
             reject(error);
         }
     });
+};
+
+const sendProxyFetchCancel = (requestId: string): void => {
+    void sendRuntimeMessage({
+        type: 'proxyFetchCancel',
+        requestId,
+    }).catch(() => undefined);
 };
 
 export const proxyFetch = async (
@@ -126,12 +151,21 @@ export const proxyFetch = async (
         throw createAbortError();
     }
 
-    const timeoutMs =
-        typeof init?.timeoutMs === 'number' && init.timeoutMs > 0 ? init.timeoutMs : undefined;
-    const redirect: RequestRedirect = init?.redirect ?? 'error';
+    const deadlineAt =
+        typeof init?.deadlineAt === 'number' && Number.isFinite(init.deadlineAt)
+            ? init.deadlineAt
+            : typeof init?.timeoutMs === 'number' &&
+                Number.isFinite(init.timeoutMs) &&
+                init.timeoutMs > 0
+              ? Date.now() + init.timeoutMs
+              : undefined;
+
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+        throw new Error('Request timed out');
+    }
 
     const webext = getWebExt();
-    if (!webext?.runtime?.sendMessage) {
+    if (init?.forceDirect || !webext?.runtime?.sendMessage) {
         const controller = new AbortController();
         let timedOut = false;
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -140,19 +174,33 @@ export const proxyFetch = async (
         if (signal) {
             signal.addEventListener('abort', onAbort, { once: true });
         }
-        if (timeoutMs !== undefined) {
+        if (deadlineAt !== undefined) {
+            const remainingMs = deadlineAt - Date.now();
+            if (remainingMs <= 0) {
+                signal?.removeEventListener('abort', onAbort);
+                throw new Error('Request timed out');
+            }
             timeoutId = setTimeout(() => {
                 timedOut = true;
                 controller.abort();
-            }, timeoutMs);
+            }, remainingMs);
         }
 
         try {
-            const { timeoutMs: _ignoredTimeout, ...fetchInit } = init ?? {};
+            const {
+                timeoutMs: _ignoredTimeout,
+                deadlineAt: _ignoredDeadline,
+                forceDirect: _ignoredForceDirect,
+                redirect: _ignoredRedirect,
+                ...fetchInit
+            } = init ?? {};
             void _ignoredTimeout;
+            void _ignoredDeadline;
+            void _ignoredForceDirect;
+            void _ignoredRedirect;
             const rawResponse = await fetch(input, {
                 ...fetchInit,
-                redirect,
+                redirect: 'error',
                 signal: controller.signal,
             });
             const bodyText = await rawResponse.text();
@@ -186,36 +234,52 @@ export const proxyFetch = async (
     );
     const body = await readBody(input, init);
 
+    if (signal?.aborted) {
+        throw createAbortError();
+    }
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+        throw new Error('Request timed out');
+    }
+
+    const requestId = createRequestId();
     let abortListener: (() => void) | undefined;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    const sendPromise = sendProxyFetch({
+    const sendPromise = sendRuntimeMessage<ProxyFetchResponse>({
         type: 'proxyFetch',
+        requestId,
         url,
         init: {
             method,
             headers,
             body,
-            redirect,
-            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+            ...(deadlineAt !== undefined ? { deadlineAt } : {}),
         },
     });
+    void sendPromise.catch(() => undefined);
 
     const racePromises: Promise<ProxyFetchResponse>[] = [sendPromise];
     if (signal) {
         racePromises.push(
             new Promise<ProxyFetchResponse>((_resolve, reject) => {
-                abortListener = () => reject(createAbortError());
+                abortListener = () => {
+                    sendProxyFetchCancel(requestId);
+                    reject(createAbortError());
+                };
                 signal.addEventListener('abort', abortListener, { once: true });
             }),
         );
     }
-    if (timeoutMs !== undefined) {
+    if (deadlineAt !== undefined) {
+        const remainingMs = deadlineAt - Date.now();
         racePromises.push(
             new Promise<ProxyFetchResponse>((_resolve, reject) => {
                 timeoutId = setTimeout(
-                    () => reject(new Error('Request timed out')),
-                    timeoutMs + 250,
+                    () => {
+                        sendProxyFetchCancel(requestId);
+                        reject(new Error('Request timed out'));
+                    },
+                    Math.max(1, remainingMs + 250),
                 );
             }),
         );
@@ -231,6 +295,16 @@ export const proxyFetch = async (
         if (timeoutId !== undefined) {
             clearTimeout(timeoutId);
         }
+    }
+
+    if (response?.aborted) {
+        throw createAbortError(response.statusText || 'Aborted');
+    }
+    if (
+        response?.timedOut ||
+        (response?.status === 0 && response.statusText === 'Request timed out')
+    ) {
+        throw new Error('Request timed out');
     }
 
     if (!response || response.status < 200 || response.status > 599) {

@@ -76,12 +76,108 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const [hasPendingPublishStatus, setHasPendingPublishStatus] = useState(false);
     const contentRef = useRef(content);
     const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
     const editVersionRef = useRef(0);
     const loadedPostIdRef = useRef<string | null>(null);
     const createdDraftRevisionRef = useRef<number | null>(null);
-    const pendingPublishStatusRef = useRef(false);
+    const committedContentByPostRef = useRef<Map<string, string>>(new Map());
+    const pendingPublishByPostRef = useRef<Map<string, boolean>>(new Map());
+    const publishVersionByPostRef = useRef<Map<string, number>>(new Map());
+    const inFlightSaveCountRef = useRef(0);
+    const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+
+    const enqueueEditorSave = useCallback((task: () => Promise<void>): Promise<void> => {
+        inFlightSaveCountRef.current += 1;
+        const next = saveChainRef.current.then(task, task).finally(() => {
+            inFlightSaveCountRef.current = Math.max(0, inFlightSaveCountRef.current - 1);
+        });
+        saveChainRef.current = next.catch(() => undefined);
+        return next;
+    }, []);
+
+    const commitQueuedPostUpdate = useCallback(
+        (options: {
+            targetPostId: string;
+            sourceContent: string;
+            forceSourceWrite?: boolean;
+            checkSourceDirty?: boolean;
+            versionAtCall?: number;
+            includePendingPublish?: boolean;
+            forceMarkPosted?: boolean;
+            publishVersionAtCall?: number;
+            clearDraftRevision?: boolean;
+        }) =>
+            enqueueEditorSave(async () => {
+                const {
+                    targetPostId,
+                    sourceContent,
+                    forceSourceWrite = false,
+                    checkSourceDirty = true,
+                    versionAtCall,
+                    includePendingPublish = false,
+                    forceMarkPosted = false,
+                    publishVersionAtCall,
+                    clearDraftRevision = false,
+                } = options;
+
+                const committed = committedContentByPostRef.current.get(targetPostId);
+                const needSource =
+                    checkSourceDirty &&
+                    (forceSourceWrite || committed === undefined || sourceContent !== committed);
+                const needPosted =
+                    forceMarkPosted ||
+                    (includePendingPublish &&
+                        Boolean(pendingPublishByPostRef.current.get(targetPostId)));
+
+                if (!needSource && !needPosted) {
+                    if (
+                        checkSourceDirty &&
+                        versionAtCall !== undefined &&
+                        loadedPostIdRef.current === targetPostId &&
+                        editVersionRef.current === versionAtCall
+                    ) {
+                        hasUnsavedChangesRef.current = false;
+                        setHasUnsavedChanges(false);
+                    }
+                    return;
+                }
+
+                await updatePost(targetPostId, {
+                    ...(needSource ? { sourceContent } : {}),
+                    ...(needPosted ? { status: 'posted' as const } : {}),
+                });
+
+                if (needSource) {
+                    committedContentByPostRef.current.set(targetPostId, sourceContent);
+                }
+                if (
+                    needPosted &&
+                    (publishVersionAtCall === undefined ||
+                        publishVersionByPostRef.current.get(targetPostId) === publishVersionAtCall)
+                ) {
+                    pendingPublishByPostRef.current.set(targetPostId, false);
+                    if (loadedPostIdRef.current === targetPostId) {
+                        setHasPendingPublishStatus(false);
+                    }
+                }
+                if (loadedPostIdRef.current === targetPostId) {
+                    if (clearDraftRevision && needSource) {
+                        createdDraftRevisionRef.current = null;
+                    }
+                    if (
+                        needSource &&
+                        versionAtCall !== undefined &&
+                        editVersionRef.current === versionAtCall
+                    ) {
+                        hasUnsavedChangesRef.current = false;
+                        setHasUnsavedChanges(false);
+                    }
+                }
+            }),
+        [enqueueEditorSave, updatePost],
+    );
 
     const defaultTranslateTargets = useMemo<Language[]>(() => [defaultLanguage], [defaultLanguage]);
 
@@ -109,7 +205,9 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         if (!post) {
             loadedPostIdRef.current = null;
             createdDraftRevisionRef.current = null;
-            pendingPublishStatusRef.current = false;
+            hasUnsavedChangesRef.current = false;
+            setHasUnsavedChanges(false);
+            setHasPendingPublishStatus(false);
             return;
         }
         if (loadedPostIdRef.current !== post.id) {
@@ -122,15 +220,25 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 !post.sourceContent.trim()
                     ? post.updatedAt
                     : null;
-            pendingPublishStatusRef.current = false;
+            committedContentByPostRef.current.set(post.id, post.sourceContent);
             editVersionRef.current += 1;
             contentRef.current = post.sourceContent;
             hasUnsavedChangesRef.current = false;
             setContent(post.sourceContent);
             setHasUnsavedChanges(false);
-        } else if (!hasUnsavedChangesRef.current && post.sourceContent !== contentRef.current) {
-            contentRef.current = post.sourceContent;
-            setContent(post.sourceContent);
+            setHasPendingPublishStatus(Boolean(pendingPublishByPostRef.current.get(post.id)));
+        } else {
+            if (inFlightSaveCountRef.current === 0) {
+                committedContentByPostRef.current.set(post.id, post.sourceContent);
+            }
+            if (
+                !hasUnsavedChangesRef.current &&
+                inFlightSaveCountRef.current === 0 &&
+                post.sourceContent !== contentRef.current
+            ) {
+                contentRef.current = post.sourceContent;
+                setContent(post.sourceContent);
+            }
         }
     }, [post]);
 
@@ -145,11 +253,28 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     // Save on unmount or when switching posts
     useEffect(() => {
         return () => {
-            if (hasUnsavedChangesRef.current && currentPostId) {
-                void updatePost(currentPostId, { sourceContent: contentRef.current });
+            if (!currentPostId) return;
+            const targetPostId = currentPostId;
+            const hadUnsavedSnapshot = hasUnsavedChangesRef.current;
+            const hadPendingPublishSnapshot = Boolean(
+                pendingPublishByPostRef.current.get(targetPostId),
+            );
+            if (!hadUnsavedSnapshot && !hadPendingPublishSnapshot) {
+                return;
             }
+            const contentSnapshot = contentRef.current;
+            const publishVersionSnapshot = publishVersionByPostRef.current.get(targetPostId) ?? 0;
+            void commitQueuedPostUpdate({
+                targetPostId,
+                sourceContent: contentSnapshot,
+                checkSourceDirty: hadUnsavedSnapshot,
+                includePendingPublish: hadPendingPublishSnapshot,
+                publishVersionAtCall: publishVersionSnapshot,
+            }).catch((err) => {
+                console.error('Save on unmount failed:', err);
+            });
         };
-    }, [currentPostId, updatePost]);
+    }, [commitQueuedPostUpdate, currentPostId]);
 
     const handleContentChange = (newContent: string) => {
         editVersionRef.current += 1;
@@ -162,25 +287,25 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
 
     const handleBlur = useCallback(async () => {
         if (!currentPostId || !hasUnsavedChangesRef.current) return;
+        const targetPostId = currentPostId;
         const versionAtStart = editVersionRef.current;
         const contentToSave = contentRef.current;
-        const persistedPost = usePostsStore.getState().getPostById(currentPostId);
-        if (persistedPost && contentToSave === persistedPost.sourceContent) {
-            hasUnsavedChangesRef.current = false;
-            setHasUnsavedChanges(false);
-            return;
-        }
         try {
-            await updatePost(currentPostId, { sourceContent: contentToSave });
-            createdDraftRevisionRef.current = null;
-            if (editVersionRef.current === versionAtStart) {
-                hasUnsavedChangesRef.current = false;
-                setHasUnsavedChanges(false);
-            }
+            await commitQueuedPostUpdate({
+                targetPostId,
+                sourceContent: contentToSave,
+                versionAtCall: versionAtStart,
+                clearDraftRevision: true,
+            });
         } catch (err) {
             console.error('Save on blur failed:', err);
+            if (loadedPostIdRef.current === targetPostId) {
+                hasUnsavedChangesRef.current = true;
+                setHasUnsavedChanges(true);
+                setError(err instanceof Error ? err.message : 'Failed to save post');
+            }
         }
-    }, [currentPostId, updatePost]);
+    }, [commitQueuedPostUpdate, currentPostId]);
 
     const handleClearSource = useCallback(async () => {
         const versionAtClear = editVersionRef.current + 1;
@@ -193,68 +318,109 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             setHasUnsavedChanges(false);
             return;
         }
+        const targetPostId = currentPostId;
         createdDraftRevisionRef.current = null;
-        clearNewlyCreatedDraft(currentPostId);
+        clearNewlyCreatedDraft(targetPostId);
         hasUnsavedChangesRef.current = true;
         setHasUnsavedChanges(true);
         try {
-            await updatePost(currentPostId, { sourceContent: '' });
-            if (editVersionRef.current === versionAtClear) {
-                hasUnsavedChangesRef.current = false;
-                setHasUnsavedChanges(false);
-            }
+            await commitQueuedPostUpdate({
+                targetPostId,
+                sourceContent: '',
+                forceSourceWrite: true,
+                versionAtCall: versionAtClear,
+            });
         } catch (err) {
             console.error('Clear source failed:', err);
+            if (loadedPostIdRef.current === targetPostId) {
+                hasUnsavedChangesRef.current = true;
+                setHasUnsavedChanges(true);
+                setError(err instanceof Error ? err.message : 'Failed to save post');
+            }
         }
-    }, [clearNewlyCreatedDraft, currentPostId, updatePost]);
+    }, [clearNewlyCreatedDraft, commitQueuedPostUpdate, currentPostId]);
 
     const handleSave = async () => {
         if (!currentPostId) return;
+        const targetPostId = currentPostId;
         const versionAtStart = editVersionRef.current;
         const contentToSave = contentRef.current;
-        const shouldMarkPosted = pendingPublishStatusRef.current;
+        const publishVersionAtStart = publishVersionByPostRef.current.get(targetPostId) ?? 0;
         setIsSaving(true);
         setError(null);
         try {
-            await updatePost(currentPostId, {
+            await commitQueuedPostUpdate({
+                targetPostId,
                 sourceContent: contentToSave,
-                ...(shouldMarkPosted ? { status: 'posted' as const } : {}),
+                forceSourceWrite: true,
+                versionAtCall: versionAtStart,
+                includePendingPublish: true,
+                publishVersionAtCall: publishVersionAtStart,
+                clearDraftRevision: true,
             });
-            createdDraftRevisionRef.current = null;
-            pendingPublishStatusRef.current = false;
-            if (editVersionRef.current === versionAtStart) {
-                hasUnsavedChangesRef.current = false;
-                setHasUnsavedChanges(false);
-            }
         } catch (err) {
             console.error('Save post failed:', err);
-            hasUnsavedChangesRef.current = true;
-            setHasUnsavedChanges(true);
-            setError(err instanceof Error ? err.message : 'Failed to save post');
+            if (loadedPostIdRef.current === targetPostId) {
+                hasUnsavedChangesRef.current = true;
+                setHasUnsavedChanges(true);
+                setError(err instanceof Error ? err.message : 'Failed to save post');
+            }
         } finally {
             setIsSaving(false);
         }
     };
 
     const handleNavigateBack = async () => {
-        const createdRevision = createdDraftRevisionRef.current;
-        if (
-            currentPostId &&
-            createdRevision !== null &&
-            !contentRef.current.trim() &&
-            variants.length === 0
-        ) {
-            hasUnsavedChangesRef.current = false;
-            createdDraftRevisionRef.current = null;
-            await discardEmptyNewDraft(currentPostId, createdRevision);
+        if (!currentPostId) {
             onNavigateBack();
             return;
         }
-        clearNewlyCreatedDraft(currentPostId || undefined);
-        if (hasUnsavedChangesRef.current && currentPostId) {
-            await updatePost(currentPostId, { sourceContent: contentRef.current });
+        const targetPostId = currentPostId;
+        const createdRevision = createdDraftRevisionRef.current;
+        const versionAtBack = editVersionRef.current;
+        const contentToSave = contentRef.current;
+        const shouldCheckDiscard =
+            createdRevision !== null && !contentToSave.trim() && variants.length === 0;
+
+        setError(null);
+        try {
+            if (shouldCheckDiscard && createdRevision !== null) {
+                let discarded = false;
+                await enqueueEditorSave(async () => {
+                    discarded = await discardEmptyNewDraft(targetPostId, createdRevision);
+                });
+                if (discarded) {
+                    if (loadedPostIdRef.current === targetPostId) {
+                        createdDraftRevisionRef.current = null;
+                        hasUnsavedChangesRef.current = false;
+                        pendingPublishByPostRef.current.set(targetPostId, false);
+                        setHasUnsavedChanges(false);
+                        setHasPendingPublishStatus(false);
+                    }
+                    onNavigateBack();
+                    return;
+                }
+                if (loadedPostIdRef.current === targetPostId) {
+                    createdDraftRevisionRef.current = null;
+                }
+            } else {
+                clearNewlyCreatedDraft(targetPostId);
+            }
+
+            await commitQueuedPostUpdate({
+                targetPostId,
+                sourceContent: contentToSave,
+                versionAtCall: versionAtBack,
+                includePendingPublish: true,
+                publishVersionAtCall: publishVersionByPostRef.current.get(targetPostId) ?? 0,
+            });
+            onNavigateBack();
+        } catch (err) {
+            console.error('Navigate back save failed:', err);
+            if (loadedPostIdRef.current === targetPostId) {
+                setError(err instanceof Error ? err.message : 'Failed to save post');
+            }
         }
-        onNavigateBack();
     };
 
     const handlePublish = () => {
@@ -270,31 +436,30 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
 
         // Mark as posted after opening intent, syncing any unsaved source content
         if (currentPostId) {
+            const targetPostId = currentPostId;
             const versionAtPublish = editVersionRef.current;
-            const hadUnsaved = hasUnsavedChangesRef.current;
             const contentToSave = contentRef.current;
+            const publishVersion = (publishVersionByPostRef.current.get(targetPostId) ?? 0) + 1;
+            publishVersionByPostRef.current.set(targetPostId, publishVersion);
+            pendingPublishByPostRef.current.set(targetPostId, true);
+            setHasPendingPublishStatus(true);
             createdDraftRevisionRef.current = null;
-            clearNewlyCreatedDraft(currentPostId);
-            void updatePost(
-                currentPostId,
-                hadUnsaved
-                    ? { status: 'posted', sourceContent: contentToSave }
-                    : { status: 'posted' },
-            )
-                .then(() => {
-                    pendingPublishStatusRef.current = false;
-                    if (hadUnsaved && editVersionRef.current === versionAtPublish) {
-                        hasUnsavedChangesRef.current = false;
-                        setHasUnsavedChanges(false);
-                    }
-                })
-                .catch((err) => {
-                    console.error('Failed to persist publish state:', err);
-                    pendingPublishStatusRef.current = true;
-                    hasUnsavedChangesRef.current = true;
-                    setHasUnsavedChanges(true);
+            clearNewlyCreatedDraft(targetPostId);
+
+            void commitQueuedPostUpdate({
+                targetPostId,
+                sourceContent: contentToSave,
+                versionAtCall: versionAtPublish,
+                forceMarkPosted: true,
+                publishVersionAtCall: publishVersion,
+            }).catch((err) => {
+                console.error('Failed to persist publish state:', err);
+                pendingPublishByPostRef.current.set(targetPostId, true);
+                if (loadedPostIdRef.current === targetPostId) {
+                    setHasPendingPublishStatus(true);
                     setError(err instanceof Error ? err.message : 'Failed to save post');
-                });
+                }
+            });
         }
     };
 
@@ -487,7 +652,19 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
 
     const handleChangeFolder = async (folderId: string | null) => {
         if (!currentPostId) return;
-        await updatePost(currentPostId, { folderId });
+        const targetPostId = currentPostId;
+        setError(null);
+        try {
+            await enqueueEditorSave(async () => {
+                await updatePost(targetPostId, { folderId });
+                if (loadedPostIdRef.current === targetPostId) {
+                    createdDraftRevisionRef.current = null;
+                }
+            });
+        } catch (err) {
+            console.error('Change folder failed:', err);
+            setError(err instanceof Error ? err.message : 'Failed to update folder');
+        }
     };
 
     const handleQuickTranslate = async (
@@ -496,6 +673,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     ) => {
         await handleTranslate([targetLanguage], sourceMode);
     };
+
+    const isDirty = hasUnsavedChanges || hasPendingPublishStatus;
 
     return (
         <div className="flex flex-col h-screen bg-bg-primary text-text-primary">
@@ -516,16 +695,16 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
 
                     <button
                         onClick={handleSave}
-                        disabled={isSaving || !hasUnsavedChanges}
+                        disabled={isSaving || !isDirty}
                         className={`text-[11px] truncate transition-colors ${
-                            hasUnsavedChanges
+                            isDirty
                                 ? 'text-accent hover:text-accent-hover font-semibold cursor-pointer'
                                 : 'text-text-muted cursor-default'
                         }`}
                     >
                         {isSaving
                             ? t('editor.saving')
-                            : hasUnsavedChanges
+                            : isDirty
                               ? `${t('editor.save')}*`
                               : t('editor.saved')}
                     </button>

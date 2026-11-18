@@ -35,6 +35,7 @@ const STORAGE_LOCK_NAME = 'polypost_storage_lock';
 const STORAGE_RPC_TYPE = 'polypost:storage_rpc';
 const QUEUE_SYM = Symbol.for('polypost.storage.queue');
 const UPDATED_AT_SYM = Symbol.for('polypost.storage.lastUpdatedAt');
+const POST_UPDATED_AT_SYM = Symbol.for('polypost.storage.lastPostUpdatedAt');
 
 type StorageMutationMethod =
     | 'savePosts'
@@ -69,6 +70,7 @@ type StorageRpcResponse = {
 interface SharedStorageState {
     [QUEUE_SYM]?: Promise<unknown>;
     [UPDATED_AT_SYM]?: number;
+    [POST_UPDATED_AT_SYM]?: number;
 }
 
 const fallbackSharedState: SharedStorageState = {};
@@ -83,6 +85,9 @@ const getSharedState = (): SharedStorageState => {
             if (typeof host[UPDATED_AT_SYM] !== 'number') {
                 host[UPDATED_AT_SYM] = 0;
             }
+            if (typeof host[POST_UPDATED_AT_SYM] !== 'number') {
+                host[POST_UPDATED_AT_SYM] = 0;
+            }
             if (!host[QUEUE_SYM]) {
                 host[QUEUE_SYM] = Promise.resolve();
             }
@@ -94,6 +99,9 @@ const getSharedState = (): SharedStorageState => {
 
     if (typeof fallbackSharedState[UPDATED_AT_SYM] !== 'number') {
         fallbackSharedState[UPDATED_AT_SYM] = 0;
+    }
+    if (typeof fallbackSharedState[POST_UPDATED_AT_SYM] !== 'number') {
+        fallbackSharedState[POST_UPDATED_AT_SYM] = 0;
     }
     if (!fallbackSharedState[QUEUE_SYM]) {
         fallbackSharedState[QUEUE_SYM] = Promise.resolve();
@@ -136,6 +144,21 @@ const nextSettingsTimestamp = (): number => {
     const shared = getSharedState();
     const next = Math.max(Date.now(), (shared[UPDATED_AT_SYM] ?? 0) + 1);
     shared[UPDATED_AT_SYM] = next;
+    return next;
+};
+
+const bumpLastPostUpdatedAt = (timestamp?: number): void => {
+    if (typeof timestamp !== 'number') {
+        return;
+    }
+    const shared = getSharedState();
+    shared[POST_UPDATED_AT_SYM] = Math.max(shared[POST_UPDATED_AT_SYM] ?? 0, timestamp);
+};
+
+const nextPostTimestamp = (minFloor = 0): number => {
+    const shared = getSharedState();
+    const next = Math.max(Date.now(), (shared[POST_UPDATED_AT_SYM] ?? 0) + 1, minFloor + 1);
+    shared[POST_UPDATED_AT_SYM] = next;
     return next;
 };
 
@@ -593,18 +616,26 @@ const localMutations = {
             const nextPosts = exists
                 ? posts.map((p) => (p.id === post.id ? post : p))
                 : [...posts, post];
+            bumpLastPostUpdatedAt(post.updatedAt);
             await _savePosts(nextPosts);
         });
     },
 
-    async updatePost(id: string, updates: Partial<Post>): Promise<void> {
+    async updatePost(id: string, updates: Partial<Post>): Promise<Post> {
         return enqueueStorageOp(async () => {
             const posts = await _getPosts();
             const index = posts.findIndex((p) => p.id === id);
-            if (index !== -1) {
-                posts[index] = { ...posts[index], ...updates, updatedAt: Date.now() };
-                await _savePosts(posts);
+            if (index === -1) {
+                throw new Error('Post no longer exists');
             }
+            const nextPost: Post = {
+                ...posts[index],
+                ...updates,
+                updatedAt: nextPostTimestamp(posts[index].updatedAt),
+            };
+            posts[index] = nextPost;
+            await _savePosts(posts);
+            return nextPost;
         });
     },
 
@@ -715,7 +746,9 @@ const localMutations = {
             const [folders, posts] = await Promise.all([_getFolders(), _getPosts()]);
             const filtered = folders.filter((f) => f.id !== id);
             const updatedPosts = posts.map((p) =>
-                p.folderId === id ? { ...p, folderId: null, updatedAt: Date.now() } : p,
+                p.folderId === id
+                    ? { ...p, folderId: null, updatedAt: nextPostTimestamp(p.updatedAt) }
+                    : p,
             );
             const webext = getWebExt();
             if (webext?.storage?.local) {
@@ -862,7 +895,7 @@ export const storage = {
         return runMutation('addPost', [post]);
     },
 
-    async updatePost(id: string, updates: Partial<Post>): Promise<void> {
+    async updatePost(id: string, updates: Partial<Post>): Promise<Post> {
         return runMutation('updatePost', [id, updates]);
     },
 
