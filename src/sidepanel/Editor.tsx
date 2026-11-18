@@ -76,6 +76,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const contentRef = useRef(content);
     const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
+    const editVersionRef = useRef(0);
+    const loadedPostIdRef = useRef<string | null>(null);
 
     // Get selected variant content (if any)
     const selectedVariant = variants.find((v) => v.isSelected);
@@ -98,9 +100,20 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
 
     // Update content when post changes
     useEffect(() => {
-        if (post) {
+        if (!post) {
+            loadedPostIdRef.current = null;
+            return;
+        }
+        if (loadedPostIdRef.current !== post.id) {
+            loadedPostIdRef.current = post.id;
+            editVersionRef.current += 1;
+            contentRef.current = post.sourceContent;
+            hasUnsavedChangesRef.current = false;
             setContent(post.sourceContent);
             setHasUnsavedChanges(false);
+        } else if (!hasUnsavedChangesRef.current && post.sourceContent !== contentRef.current) {
+            contentRef.current = post.sourceContent;
+            setContent(post.sourceContent);
         }
     }, [post]);
 
@@ -122,35 +135,72 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     }, [currentPostId, updatePost]);
 
     const handleContentChange = (newContent: string) => {
+        editVersionRef.current += 1;
+        contentRef.current = newContent;
+        hasUnsavedChangesRef.current = true;
         setContent(newContent);
         setError(null);
         setHasUnsavedChanges(true);
     };
 
     const handleBlur = useCallback(async () => {
-        if (!currentPostId || !hasUnsavedChanges) return;
+        if (!currentPostId || !hasUnsavedChangesRef.current) return;
+        const versionAtStart = editVersionRef.current;
+        const contentToSave = contentRef.current;
         try {
-            await updatePost(currentPostId, { sourceContent: content });
-            setHasUnsavedChanges(false);
+            await updatePost(currentPostId, { sourceContent: contentToSave });
+            if (editVersionRef.current === versionAtStart) {
+                hasUnsavedChangesRef.current = false;
+                setHasUnsavedChanges(false);
+            }
         } catch (err) {
             console.error('Save on blur failed:', err);
         }
-    }, [currentPostId, content, hasUnsavedChanges, updatePost]);
+    }, [currentPostId, updatePost]);
+
+    const handleClearSource = useCallback(async () => {
+        const versionAtClear = editVersionRef.current + 1;
+        editVersionRef.current = versionAtClear;
+        contentRef.current = '';
+        setContent('');
+        setError(null);
+        if (!currentPostId) {
+            hasUnsavedChangesRef.current = false;
+            setHasUnsavedChanges(false);
+            return;
+        }
+        hasUnsavedChangesRef.current = true;
+        setHasUnsavedChanges(true);
+        try {
+            await updatePost(currentPostId, { sourceContent: '' });
+            if (editVersionRef.current === versionAtClear) {
+                hasUnsavedChangesRef.current = false;
+                setHasUnsavedChanges(false);
+            }
+        } catch (err) {
+            console.error('Clear source failed:', err);
+        }
+    }, [currentPostId, updatePost]);
 
     const handleSave = async () => {
         if (!currentPostId) return;
+        const versionAtStart = editVersionRef.current;
+        const contentToSave = contentRef.current;
         setIsSaving(true);
         try {
-            await updatePost(currentPostId, { sourceContent: content });
-            setHasUnsavedChanges(false);
+            await updatePost(currentPostId, { sourceContent: contentToSave });
+            if (editVersionRef.current === versionAtStart) {
+                hasUnsavedChangesRef.current = false;
+                setHasUnsavedChanges(false);
+            }
         } finally {
             setIsSaving(false);
         }
     };
 
     const handleNavigateBack = async () => {
-        if (hasUnsavedChanges && currentPostId) {
-            await updatePost(currentPostId, { sourceContent: content });
+        if (hasUnsavedChangesRef.current && currentPostId) {
+            await updatePost(currentPostId, { sourceContent: contentRef.current });
         }
         onNavigateBack();
     };
@@ -439,6 +489,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                         content={content}
                         onChange={handleContentChange}
                         onBlur={handleBlur}
+                        onClear={handleClearSource}
                         onPolish={openPolishModal}
                         onPolishTemplate={handlePolish}
                         onTranslate={openTranslateModal}

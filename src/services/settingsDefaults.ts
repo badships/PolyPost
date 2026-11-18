@@ -21,6 +21,27 @@ import {
 
 export const DEFAULT_CUSTOM_PROVIDER_ID = 'custom_default';
 
+const LEGACY_POLISH_PROMPTS: Record<string, string> = {
+    professional:
+        'You are a professional social media copywriter. Rewrite the following tweet to be more professional and polished while maintaining the core message. Make it suitable for a business or professional audience. Keep it within 280 characters.',
+    viral: 'You are a viral content expert. Rewrite the following tweet to maximize engagement and shareability. Use attention-grabbing hooks, create curiosity, and encourage interaction. Keep it within 280 characters.',
+    casual: 'You are a friendly social media content creator. Rewrite the following tweet to be more casual, friendly, and approachable. Make it feel like a genuine conversation with friends. Keep it within 280 characters.',
+    technical:
+        'You are a technical expert in the field. Rewrite the following tweet to sound more authoritative and technically accurate. Use precise terminology and establish expertise. Keep it within 280 characters.',
+    emoji: "You are a social media expert who knows how to use emojis effectively. Rewrite the following tweet with strategic emoji placement to enhance readability and emotional impact. Don't overdo it - use 3-5 emojis maximum. Keep it within 280 characters.",
+    concise:
+        'You are a master of brevity. Rewrite the following tweet to be as concise and impactful as possible. Remove all unnecessary words while preserving the core message. Make every word count. Keep it within 280 characters.',
+};
+
+const LEGACY_POLISH_TEMPLATE_DESCRIPTIONS: Record<string, string> = {
+    professional: 'Perfect for business content and professional networking',
+    viral: 'Optimized for maximum engagement and shares',
+    casual: 'Great for personal brand and friendly interactions',
+    technical: 'Ideal for industry insights and expert content',
+    emoji: 'Enhanced with strategic emoji for visual appeal',
+    concise: 'Sharp and impactful, every word matters',
+};
+
 export const buildDefaultPrompts = (): PolishPrompt[] => {
     return Object.entries(POLISH_PROMPTS).map(([key, content]) => ({
         id: key,
@@ -75,7 +96,29 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export const normalizeSettings = (settings?: Partial<Settings> | null): Settings => {
-    const prompts = buildDefaultPrompts();
+    const defaultPrompts = buildDefaultPrompts();
+    const defaultPromptById = new Map(defaultPrompts.map((prompt) => [prompt.id, prompt]));
+    const rawPrompts = Array.isArray(settings?.prompts) ? settings.prompts : [];
+    const prompts =
+        rawPrompts.length > 0
+            ? rawPrompts.map((prompt) => {
+                  const builtIn = defaultPromptById.get(prompt.id);
+                  if (!builtIn) {
+                      return { ...prompt };
+                  }
+                  const isLegacyContent =
+                      !prompt.content || prompt.content === LEGACY_POLISH_PROMPTS[prompt.id];
+                  const isLegacyDescription =
+                      !prompt.description ||
+                      prompt.description === LEGACY_POLISH_TEMPLATE_DESCRIPTIONS[prompt.id];
+                  return {
+                      ...prompt,
+                      name: prompt.name || builtIn.name,
+                      description: isLegacyDescription ? builtIn.description : prompt.description,
+                      content: isLegacyContent ? builtIn.content : prompt.content,
+                  };
+              })
+            : defaultPrompts;
     const requestedDefault =
         settings?.defaultPolishTemplate || DEFAULT_SETTINGS.defaultPolishTemplate;
     const defaultPolishTemplate = prompts.some((prompt) => prompt.id === requestedDefault)

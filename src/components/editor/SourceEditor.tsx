@@ -47,6 +47,7 @@ interface SourceEditorProps {
     content: string;
     onChange: (content: string) => void;
     onBlur?: () => void;
+    onClear?: () => void;
     onPolish: () => void;
     onPolishTemplate?: (templateId: PolishTemplate) => void;
     onTranslate: () => void;
@@ -68,6 +69,7 @@ export const SourceEditor: React.FC<SourceEditorProps> = ({
     content,
     onChange,
     onBlur,
+    onClear,
     onPolish,
     onPolishTemplate,
     onTranslate,
@@ -373,7 +375,17 @@ export const SourceEditor: React.FC<SourceEditorProps> = ({
                     </button>
                     <button
                         type="button"
-                        onClick={() => onChange('')}
+                        onMouseDown={(e) => {
+                            e.preventDefault();
+                        }}
+                        onClick={() => {
+                            setLocalValue('');
+                            if (onClear) {
+                                onClear();
+                            } else {
+                                onChange('');
+                            }
+                        }}
                         disabled={!content}
                         className="w-6 h-6 rounded-full inline-flex items-center justify-center text-text-muted hover:text-[#f4212e] hover:bg-[#f4212e]/10 transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
                         title={t('quick_translate.clear')}
