@@ -41,6 +41,7 @@ type StorageMutationMethod =
     | 'addPost'
     | 'updatePost'
     | 'deletePost'
+    | 'deleteEmptyDraftIfUnmodified'
     | 'saveVariants'
     | 'addVariant'
     | 'deleteVariant'
@@ -626,6 +627,29 @@ const localMutations = {
         });
     },
 
+    async deleteEmptyDraftIfUnmodified(id: string, expectedUpdatedAt: number): Promise<boolean> {
+        return enqueueStorageOp(async () => {
+            const [posts, variants] = await Promise.all([_getPosts(), _getVariants()]);
+            const target = posts.find((p) => p.id === id);
+            if (!target) {
+                return false;
+            }
+            const hasVariants = variants.some((v) => v.postId === id);
+            if (
+                target.status !== 'draft' ||
+                target.updatedAt !== expectedUpdatedAt ||
+                target.sourceContent.trim().length > 0 ||
+                hasVariants
+            ) {
+                return false;
+            }
+
+            const filtered = posts.filter((p) => p.id !== id);
+            await _savePosts(filtered);
+            return true;
+        });
+    },
+
     async saveVariants(variants: Variant[]): Promise<void> {
         return enqueueStorageOp(() => _saveVariants(variants));
     },
@@ -844,6 +868,10 @@ export const storage = {
 
     async deletePost(id: string): Promise<void> {
         return runMutation('deletePost', [id]);
+    },
+
+    async deleteEmptyDraftIfUnmodified(id: string, expectedUpdatedAt: number): Promise<boolean> {
+        return runMutation('deleteEmptyDraftIfUnmodified', [id, expectedUpdatedAt]);
     },
 
     // ============================================

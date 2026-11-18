@@ -116,6 +116,8 @@ type ProxyFetchMessage = {
         method?: string;
         headers?: Record<string, string>;
         body?: string;
+        redirect?: RequestRedirect;
+        timeoutMs?: number;
     };
 };
 
@@ -150,10 +152,21 @@ webext?.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
         return false;
     }
 
+    const controller = new AbortController();
+    const timeoutMs =
+        typeof init?.timeoutMs === 'number' && init.timeoutMs > 0 ? init.timeoutMs : 60000;
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, timeoutMs);
+
     const requestInit: RequestInit = {
         method: init?.method,
         headers: init?.headers,
         body: init?.body,
+        redirect: init?.redirect ?? 'error',
+        signal: controller.signal,
     };
 
     fetch(url, requestInit)
@@ -176,10 +189,17 @@ webext?.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
             sendResponse({
                 ok: false,
                 status: 0,
-                statusText: error instanceof Error ? error.message : 'Network error',
+                statusText: timedOut
+                    ? 'Request timed out'
+                    : error instanceof Error
+                      ? error.message
+                      : 'Network error',
                 headers: {},
                 body: '',
             });
+        })
+        .finally(() => {
+            clearTimeout(timeoutId);
         });
 
     return true;

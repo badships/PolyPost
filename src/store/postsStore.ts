@@ -7,6 +7,7 @@ interface PostsState {
     posts: Post[];
     variants: Variant[];
     currentPostId: string | null;
+    newlyCreatedDraft: { id: string; updatedAt: number } | null;
     isLoading: boolean;
 
     // Actions
@@ -14,6 +15,8 @@ interface PostsState {
     createPost: (sourceContent: string, folderId?: string | null) => Promise<Post>;
     updatePost: (id: string, updates: Partial<Post>) => Promise<void>;
     deletePost: (id: string) => Promise<void>;
+    discardEmptyNewDraft: (id: string, expectedUpdatedAt: number) => Promise<boolean>;
+    clearNewlyCreatedDraft: (id?: string) => void;
     setCurrentPost: (id: string | null) => void;
 
     // Variant actions
@@ -33,6 +36,7 @@ export const usePostsStore = create<PostsState>((set, get) => ({
     posts: [],
     variants: [],
     currentPostId: null,
+    newlyCreatedDraft: null,
     isLoading: false,
 
     loadPosts: async () => {
@@ -53,17 +57,23 @@ export const usePostsStore = create<PostsState>((set, get) => ({
     },
 
     createPost: async (sourceContent: string, folderId: string | null = null) => {
+        const now = Date.now();
         const post: Post = {
             id: generateId(),
             folderId,
             sourceContent,
             status: 'draft',
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            createdAt: now,
+            updatedAt: now,
         };
 
         await storage.addPost(post);
-        set((state) => ({ posts: [...state.posts, post] }));
+        set((state) => ({
+            posts: [...state.posts, post],
+            newlyCreatedDraft: !sourceContent.trim()
+                ? { id: post.id, updatedAt: post.updatedAt }
+                : state.newlyCreatedDraft,
+        }));
         return post;
     },
 
@@ -73,6 +83,7 @@ export const usePostsStore = create<PostsState>((set, get) => ({
             posts: state.posts.map((p) =>
                 p.id === id ? { ...p, ...updates, updatedAt: Date.now() } : p,
             ),
+            newlyCreatedDraft: state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
         }));
     },
 
@@ -82,6 +93,33 @@ export const usePostsStore = create<PostsState>((set, get) => ({
             posts: state.posts.filter((p) => p.id !== id),
             variants: state.variants.filter((v) => v.postId !== id),
             currentPostId: state.currentPostId === id ? null : state.currentPostId,
+            newlyCreatedDraft: state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
+        }));
+    },
+
+    discardEmptyNewDraft: async (id: string, expectedUpdatedAt: number) => {
+        const deleted = await storage.deleteEmptyDraftIfUnmodified(id, expectedUpdatedAt);
+        if (deleted) {
+            set((state) => ({
+                posts: state.posts.filter((p) => p.id !== id),
+                variants: state.variants.filter((v) => v.postId !== id),
+                currentPostId: state.currentPostId === id ? null : state.currentPostId,
+                newlyCreatedDraft:
+                    state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
+            }));
+            return true;
+        }
+        set((state) => ({
+            newlyCreatedDraft: state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
+        }));
+        await get().loadPosts();
+        return false;
+    },
+
+    clearNewlyCreatedDraft: (id?: string) => {
+        set((state) => ({
+            newlyCreatedDraft:
+                !id || state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
         }));
     },
 
@@ -111,7 +149,11 @@ export const usePostsStore = create<PostsState>((set, get) => ({
         };
 
         await storage.addVariant(variant);
-        set((state) => ({ variants: [...state.variants, variant] }));
+        set((state) => ({
+            variants: [...state.variants, variant],
+            newlyCreatedDraft:
+                state.newlyCreatedDraft?.id === variantData.postId ? null : state.newlyCreatedDraft,
+        }));
         return variant;
     },
 

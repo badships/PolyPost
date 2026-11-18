@@ -34,7 +34,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         currentPostId,
         getPostById,
         updatePost,
-        deletePost,
+        discardEmptyNewDraft,
+        clearNewlyCreatedDraft,
         addVariant,
         selectVariant,
         deselectVariants,
@@ -79,7 +80,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
     const editVersionRef = useRef(0);
     const loadedPostIdRef = useRef<string | null>(null);
-    const isNewlyCreatedEmptyRef = useRef(false);
+    const createdDraftRevisionRef = useRef<number | null>(null);
+    const pendingPublishStatusRef = useRef(false);
 
     const defaultTranslateTargets = useMemo<Language[]>(() => [defaultLanguage], [defaultLanguage]);
 
@@ -106,15 +108,21 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     useEffect(() => {
         if (!post) {
             loadedPostIdRef.current = null;
-            isNewlyCreatedEmptyRef.current = false;
+            createdDraftRevisionRef.current = null;
+            pendingPublishStatusRef.current = false;
             return;
         }
         if (loadedPostIdRef.current !== post.id) {
             loadedPostIdRef.current = post.id;
-            isNewlyCreatedEmptyRef.current =
+            const createdDraft = usePostsStore.getState().newlyCreatedDraft;
+            createdDraftRevisionRef.current =
+                createdDraft?.id === post.id &&
+                createdDraft.updatedAt === post.updatedAt &&
                 post.status === 'draft' &&
-                !post.sourceContent.trim() &&
-                post.createdAt === post.updatedAt;
+                !post.sourceContent.trim()
+                    ? post.updatedAt
+                    : null;
+            pendingPublishStatusRef.current = false;
             editVersionRef.current += 1;
             contentRef.current = post.sourceContent;
             hasUnsavedChangesRef.current = false;
@@ -156,11 +164,15 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         if (!currentPostId || !hasUnsavedChangesRef.current) return;
         const versionAtStart = editVersionRef.current;
         const contentToSave = contentRef.current;
+        const persistedPost = usePostsStore.getState().getPostById(currentPostId);
+        if (persistedPost && contentToSave === persistedPost.sourceContent) {
+            hasUnsavedChangesRef.current = false;
+            setHasUnsavedChanges(false);
+            return;
+        }
         try {
             await updatePost(currentPostId, { sourceContent: contentToSave });
-            if (contentToSave.trim()) {
-                isNewlyCreatedEmptyRef.current = false;
-            }
+            createdDraftRevisionRef.current = null;
             if (editVersionRef.current === versionAtStart) {
                 hasUnsavedChangesRef.current = false;
                 setHasUnsavedChanges(false);
@@ -181,6 +193,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             setHasUnsavedChanges(false);
             return;
         }
+        createdDraftRevisionRef.current = null;
+        clearNewlyCreatedDraft(currentPostId);
         hasUnsavedChangesRef.current = true;
         setHasUnsavedChanges(true);
         try {
@@ -192,39 +206,51 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         } catch (err) {
             console.error('Clear source failed:', err);
         }
-    }, [currentPostId, updatePost]);
+    }, [clearNewlyCreatedDraft, currentPostId, updatePost]);
 
     const handleSave = async () => {
         if (!currentPostId) return;
         const versionAtStart = editVersionRef.current;
         const contentToSave = contentRef.current;
+        const shouldMarkPosted = pendingPublishStatusRef.current;
         setIsSaving(true);
+        setError(null);
         try {
-            await updatePost(currentPostId, { sourceContent: contentToSave });
-            if (contentToSave.trim()) {
-                isNewlyCreatedEmptyRef.current = false;
-            }
+            await updatePost(currentPostId, {
+                sourceContent: contentToSave,
+                ...(shouldMarkPosted ? { status: 'posted' as const } : {}),
+            });
+            createdDraftRevisionRef.current = null;
+            pendingPublishStatusRef.current = false;
             if (editVersionRef.current === versionAtStart) {
                 hasUnsavedChangesRef.current = false;
                 setHasUnsavedChanges(false);
             }
+        } catch (err) {
+            console.error('Save post failed:', err);
+            hasUnsavedChangesRef.current = true;
+            setHasUnsavedChanges(true);
+            setError(err instanceof Error ? err.message : 'Failed to save post');
         } finally {
             setIsSaving(false);
         }
     };
 
     const handleNavigateBack = async () => {
+        const createdRevision = createdDraftRevisionRef.current;
         if (
             currentPostId &&
-            isNewlyCreatedEmptyRef.current &&
+            createdRevision !== null &&
             !contentRef.current.trim() &&
             variants.length === 0
         ) {
             hasUnsavedChangesRef.current = false;
-            await deletePost(currentPostId);
+            createdDraftRevisionRef.current = null;
+            await discardEmptyNewDraft(currentPostId, createdRevision);
             onNavigateBack();
             return;
         }
+        clearNewlyCreatedDraft(currentPostId || undefined);
         if (hasUnsavedChangesRef.current && currentPostId) {
             await updatePost(currentPostId, { sourceContent: contentRef.current });
         }
@@ -247,18 +273,28 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             const versionAtPublish = editVersionRef.current;
             const hadUnsaved = hasUnsavedChangesRef.current;
             const contentToSave = contentRef.current;
-            isNewlyCreatedEmptyRef.current = false;
+            createdDraftRevisionRef.current = null;
+            clearNewlyCreatedDraft(currentPostId);
             void updatePost(
                 currentPostId,
                 hadUnsaved
                     ? { status: 'posted', sourceContent: contentToSave }
                     : { status: 'posted' },
-            ).then(() => {
-                if (hadUnsaved && editVersionRef.current === versionAtPublish) {
-                    hasUnsavedChangesRef.current = false;
-                    setHasUnsavedChanges(false);
-                }
-            });
+            )
+                .then(() => {
+                    pendingPublishStatusRef.current = false;
+                    if (hadUnsaved && editVersionRef.current === versionAtPublish) {
+                        hasUnsavedChangesRef.current = false;
+                        setHasUnsavedChanges(false);
+                    }
+                })
+                .catch((err) => {
+                    console.error('Failed to persist publish state:', err);
+                    pendingPublishStatusRef.current = true;
+                    hasUnsavedChangesRef.current = true;
+                    setHasUnsavedChanges(true);
+                    setError(err instanceof Error ? err.message : 'Failed to save post');
+                });
         }
     };
 

@@ -1,11 +1,12 @@
 import OpenAI from 'openai';
 import type { ApiFormat, Language } from '@/types';
 import { getTranslationPrompt, LANGUAGE_FULL_NAMES } from './prompts';
-import { proxyFetch } from './proxyFetch';
+import { proxyFetch, type ProxyFetchInit } from './proxyFetch';
 import { normalizeModelName, supportsCustomTemperature, usesMaxCompletionTokens } from './models';
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
+export const TEST_CONNECTION_TIMEOUT_MS = 10_000;
 
 const COMPLETION_TOKEN_LIMIT = 2048;
 
@@ -21,24 +22,163 @@ const sanitizeApiKey = (apiKey: string): string => {
     return result.trim();
 };
 
-const extractErrorMessage = (error: unknown, fallback: string): string => {
-    if (error && typeof error === 'object') {
-        const errObj = error as {
-            status?: number;
-            message?: string;
-            error?: { message?: string };
-        };
-        const apiMsg = errObj.error?.message || errObj.message;
-        if (apiMsg) {
-            return errObj.status && !apiMsg.includes(String(errObj.status))
-                ? `${errObj.status}: ${apiMsg}`
-                : apiMsg;
+const stripControlChars = (value: string): string => {
+    let result = '';
+    for (const ch of value) {
+        const code = ch.charCodeAt(0);
+        if ((code >= 0x00 && code <= 0x1f && code !== 0x0a && code !== 0x0d) || code === 0x7f) {
+            continue;
+        }
+        result += ch;
+    }
+    return result.trim();
+};
+
+const toSafeErrorText = (value: unknown): string => {
+    if (typeof value === 'string') {
+        return value;
+    }
+    if (value === null || value === undefined) {
+        return '';
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+    }
+    if (typeof value === 'object') {
+        const obj = value as { error?: unknown; message?: unknown; detail?: unknown };
+        if (obj.error !== undefined && obj.error !== value) {
+            const nested = toSafeErrorText(obj.error);
+            if (nested) return nested;
+        }
+        if (obj.message !== undefined && obj.message !== value) {
+            const nested = toSafeErrorText(obj.message);
+            if (nested) return nested;
+        }
+        if (obj.detail !== undefined && obj.detail !== value) {
+            const nested = toSafeErrorText(obj.detail);
+            if (nested) return nested;
+        }
+        if (value instanceof Error && typeof value.message === 'string') {
+            return value.message;
+        }
+        try {
+            return JSON.stringify(value);
+        } catch {
+            return '';
         }
     }
-    if (error instanceof Error && error.message) {
-        return error.message;
+    return '';
+};
+
+export const sanitizeProviderErrorMessage = (
+    raw: unknown,
+    apiKey?: string,
+    status?: number,
+    fallback = 'Connection test failed.',
+): string => {
+    const rawStatus =
+        status ??
+        (raw && typeof raw === 'object' && typeof (raw as { status?: unknown }).status === 'number'
+            ? (raw as { status: number }).status
+            : undefined);
+
+    let message = stripControlChars(toSafeErrorText(raw));
+    if (!message) {
+        message = rawStatus ? `Request failed with status ${rawStatus}` : fallback;
     }
-    return fallback;
+
+    const candidates = new Set<string>();
+    if (typeof apiKey === 'string') {
+        const trimmed = apiKey.trim();
+        const cleaned = sanitizeApiKey(apiKey);
+        if (trimmed.length >= 4) candidates.add(trimmed);
+        if (cleaned.length >= 4) candidates.add(cleaned);
+    }
+    for (const secret of candidates) {
+        message = message.split(secret).join('[REDACTED]');
+    }
+
+    message = message
+        .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+        .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{6,}\b/g, '[REDACTED]');
+
+    if (message.length > 240) {
+        message = `${message.slice(0, 237)}...`;
+    }
+
+    if (rawStatus && !message.includes(String(rawStatus))) {
+        return `${rawStatus}: ${message}`;
+    }
+    return message;
+};
+
+const isValidOpenAIProbeResponse = (data: unknown): boolean => {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return false;
+    }
+    const obj = data as { error?: unknown; choices?: unknown };
+    if (obj.error) {
+        return false;
+    }
+    if (!Array.isArray(obj.choices) || obj.choices.length === 0) {
+        return false;
+    }
+    const choice = obj.choices[0] as {
+        finish_reason?: unknown;
+        message?: unknown;
+    } | null;
+    if (!choice || typeof choice !== 'object') {
+        return false;
+    }
+    const message = choice.message as {
+        content?: unknown;
+        reasoning_content?: unknown;
+        reasoning?: unknown;
+    } | null;
+    if (!message || typeof message !== 'object') {
+        return false;
+    }
+    const hasText =
+        (typeof message.content === 'string' && message.content.trim().length > 0) ||
+        (typeof message.reasoning_content === 'string' &&
+            message.reasoning_content.trim().length > 0) ||
+        (typeof message.reasoning === 'string' && message.reasoning.trim().length > 0);
+    if (hasText) {
+        return true;
+    }
+    return (
+        choice.finish_reason === 'length' &&
+        (typeof message.content === 'string' || message.content === null)
+    );
+};
+
+const isValidAnthropicProbeResponse = (data: unknown): boolean => {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return false;
+    }
+    const obj = data as { error?: unknown; content?: unknown };
+    if (obj.error) {
+        return false;
+    }
+    if (Array.isArray(obj.content) && obj.content.length > 0) {
+        return obj.content.every((block) => {
+            if (!block || typeof block !== 'object') {
+                return false;
+            }
+            const b = block as { type?: unknown; text?: unknown; thinking?: unknown };
+            if (typeof b.type !== 'string') {
+                return false;
+            }
+            if (b.type === 'text') {
+                return typeof b.text === 'string';
+            }
+            if (b.type === 'thinking') {
+                return typeof b.thinking === 'string';
+            }
+            return true;
+        });
+    }
+    return isValidOpenAIProbeResponse(data);
 };
 
 const normalizeBaseUrl = (baseURL?: string): string => {
@@ -77,6 +217,20 @@ const isCustomApiEndpoint = (baseURL?: string): boolean => {
     }
 };
 
+const noRedirectDirectFetch: typeof fetch = (input, init) => {
+    return fetch(input, {
+        ...init,
+        redirect: init?.redirect ?? 'error',
+    });
+};
+
+const noRedirectProxyFetch: typeof fetch = (input, init) => {
+    return proxyFetch(input, {
+        ...init,
+        redirect: init?.redirect ?? 'error',
+    });
+};
+
 interface AIResponse {
     content: string;
     description: string;
@@ -103,7 +257,7 @@ export class AIService {
             this.client = new OpenAI({
                 apiKey: cleanKey,
                 baseURL: resolvedBaseUrl,
-                fetch: useProxyFetch ? proxyFetch : undefined,
+                fetch: useProxyFetch ? noRedirectProxyFetch : noRedirectDirectFetch,
                 dangerouslyAllowBrowser: true, // Required for browser extension
             });
             this.clientConfigKey = configKey;
@@ -123,15 +277,17 @@ export class AIService {
         return text;
     }
 
-    private async createAnthropicCompletion(params: {
+    private async sendAnthropicRequest(params: {
         apiKey: string;
         baseURL?: string;
         model: string;
         system: string;
         userPrompt: string;
         maxTokens?: number;
+        timeoutMs?: number;
+        signal?: AbortSignal;
         failureMessage: string;
-    }): Promise<string> {
+    }): Promise<any> {
         const cleanKey = sanitizeApiKey(params.apiKey);
         const url = buildAnthropicMessagesUrl(params.baseURL);
         const headers: Record<string, string> = {
@@ -150,9 +306,12 @@ export class AIService {
 
         let response: Response;
         try {
-            response = await proxyFetch(url, {
+            const requestInit: ProxyFetchInit = {
                 method: 'POST',
                 headers,
+                redirect: 'error',
+                signal: params.signal,
+                timeoutMs: params.timeoutMs,
                 body: JSON.stringify({
                     model: params.model,
                     max_tokens: params.maxTokens ?? COMPLETION_TOKEN_LIMIT,
@@ -164,9 +323,13 @@ export class AIService {
                         },
                     ],
                 }),
-            });
+            };
+            response = await proxyFetch(url, requestInit);
         } catch (error) {
             console.error('Anthropic request error:', error);
+            if (params.signal?.aborted) {
+                throw new Error('Connection test timed out.');
+            }
             throw new Error(params.failureMessage);
         }
 
@@ -181,12 +344,29 @@ export class AIService {
         }
 
         if (!response.ok) {
-            const apiMessage =
-                data?.error?.message ||
-                data?.message ||
-                `Request failed with status ${response.status}`;
-            throw new Error(apiMessage);
+            throw new Error(
+                sanitizeProviderErrorMessage(
+                    data ?? rawBody,
+                    params.apiKey,
+                    response.status,
+                    `Request failed with status ${response.status}`,
+                ),
+            );
         }
+
+        return data;
+    }
+
+    private async createAnthropicCompletion(params: {
+        apiKey: string;
+        baseURL?: string;
+        model: string;
+        system: string;
+        userPrompt: string;
+        maxTokens?: number;
+        failureMessage: string;
+    }): Promise<string> {
+        const data = await this.sendAnthropicRequest(params);
 
         if (data?.stop_reason === 'max_tokens') {
             throw new Error('AI response was truncated before completion. Please try again.');
@@ -295,44 +475,95 @@ export class AIService {
         apiKey: string;
         baseURL?: string;
         modelName?: string;
+        timeoutMs?: number;
     }): Promise<{ model: string; latencyMs: number }> {
         const cleanKey = sanitizeApiKey(params.apiKey);
         if (!cleanKey) {
             throw new Error('API key is required.');
         }
 
+        const timeoutMs =
+            typeof params.timeoutMs === 'number' && params.timeoutMs > 0
+                ? params.timeoutMs
+                : TEST_CONNECTION_TIMEOUT_MS;
         const startedAt = Date.now();
         const model = normalizeModelName(params.modelName);
+        const controller = new AbortController();
+        let timedOut = false;
+        const timeoutId = setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+        }, timeoutMs);
 
-        if (params.apiFormat === 'anthropic') {
-            await this.createAnthropicCompletion({
-                apiKey: cleanKey,
-                baseURL: params.baseURL,
-                model,
-                system: 'Reply with OK.',
-                userPrompt: 'Ping',
-                maxTokens: 16,
-                failureMessage: 'Network error while connecting to endpoint.',
-            });
-            return { model, latencyMs: Math.max(1, Date.now() - startedAt) };
-        }
-
-        const client = this.getClient(cleanKey, params.baseURL);
-        const isCustomEndpoint = isCustomApiEndpoint(params.baseURL);
         try {
-            const response = await client.chat.completions.create({
-                model,
-                messages: [{ role: 'user', content: 'Ping' }],
-                ...(usesMaxCompletionTokens(model, isCustomEndpoint)
-                    ? { max_completion_tokens: 32 }
-                    : { max_tokens: 32 }),
+            if (params.apiFormat === 'anthropic') {
+                const data = await this.sendAnthropicRequest({
+                    apiKey: cleanKey,
+                    baseURL: params.baseURL,
+                    model,
+                    system: 'Reply with OK.',
+                    userPrompt: 'Ping',
+                    maxTokens: 64,
+                    timeoutMs,
+                    signal: controller.signal,
+                    failureMessage: 'Network error while connecting to endpoint.',
+                });
+                if (!isValidAnthropicProbeResponse(data)) {
+                    throw new Error('Provider returned an unexpected response format.');
+                }
+                return { model, latencyMs: Math.max(1, Date.now() - startedAt) };
+            }
+
+            const isCustomEndpoint = isCustomApiEndpoint(params.baseURL);
+            const probeFetch: typeof fetch = (input, init) => {
+                const probeInit: ProxyFetchInit = {
+                    ...init,
+                    redirect: 'error',
+                    timeoutMs,
+                };
+                return isCustomEndpoint ? proxyFetch(input, probeInit) : fetch(input, probeInit);
+            };
+            const probeClient = new OpenAI({
+                apiKey: cleanKey,
+                baseURL: normalizeBaseUrl(params.baseURL),
+                fetch: probeFetch,
+                maxRetries: 0,
+                timeout: timeoutMs,
+                dangerouslyAllowBrowser: true,
             });
-            if (!response.choices?.length) {
-                throw new Error('Provider returned no choices.');
+
+            const response = await probeClient.chat.completions.create(
+                {
+                    model,
+                    messages: [{ role: 'user', content: 'Ping' }],
+                    ...(usesMaxCompletionTokens(model, isCustomEndpoint)
+                        ? { max_completion_tokens: 64 }
+                        : { max_tokens: 64 }),
+                },
+                {
+                    maxRetries: 0,
+                    timeout: timeoutMs,
+                    signal: controller.signal,
+                },
+            );
+            if (!isValidOpenAIProbeResponse(response)) {
+                throw new Error('Provider returned an unexpected response format.');
             }
             return { model, latencyMs: Math.max(1, Date.now() - startedAt) };
         } catch (error) {
-            throw new Error(extractErrorMessage(error, 'Connection test failed.'));
+            if (timedOut) {
+                throw new Error('Connection test timed out.');
+            }
+            throw new Error(
+                sanitizeProviderErrorMessage(
+                    error,
+                    params.apiKey,
+                    undefined,
+                    'Connection test failed.',
+                ),
+            );
+        } finally {
+            clearTimeout(timeoutId);
         }
     }
 

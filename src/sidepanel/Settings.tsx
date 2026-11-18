@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { Button, Input } from '@/components/ui';
 import { useSettingsStore } from '@/store';
-import { aiService } from '@/services/ai';
+import { aiService, sanitizeProviderErrorMessage } from '@/services/ai';
 import { ensureHostPermission } from '@/services/permissions';
 import type {
     ApiFormat,
@@ -108,6 +108,34 @@ const buildInitialBuiltInVersions = (): Record<BuiltInProviderId, number> => {
     );
 };
 
+const getActiveTestConfigSignature = (formState: AiFormState): string => {
+    if (isBuiltInProviderId(formState.provider)) {
+        const def = getProviderDefinition(formState.provider);
+        const cfg = formState.providerConfigs[formState.provider];
+        const cleanKey = cfg?.apiKey?.trim() || '';
+        const normalizedModel = normalizeModelNameForProvider(formState.provider, cfg?.modelName);
+        return JSON.stringify([
+            'builtin',
+            formState.provider,
+            def.apiFormat,
+            def.baseUrl,
+            cleanKey,
+            normalizedModel,
+        ]);
+    }
+    const channel =
+        formState.customProviders.find((c) => c.id === formState.activeCustomProviderId) ||
+        formState.customProviders[0];
+    return JSON.stringify([
+        'custom',
+        channel?.id || '',
+        channel?.apiFormat === 'anthropic' ? 'anthropic' : 'openai',
+        (channel?.baseUrl || '').trim(),
+        (channel?.apiKey || '').trim(),
+        normalizeModelName(channel?.modelName),
+    ]);
+};
+
 export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
     const {
         provider,
@@ -146,12 +174,15 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
 
     const [isSaving, setIsSaving] = useState(false);
     const [isTesting, setIsTesting] = useState(false);
+    const [testingSignature, setTestingSignature] = useState<string | null>(null);
     const [showApiKey, setShowApiKey] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [testFeedback, setTestFeedback] = useState<{
+        signature: string;
         ok: boolean;
         message: string;
     } | null>(null);
+    const testRequestSeqRef = useRef(0);
     const dirtyFieldsRef = useRef<Set<AiFormField>>(new Set());
     const dirtyBuiltInProvidersRef = useRef<Set<BuiltInProviderId>>(new Set());
     const fieldEditVersionRef = useRef<Record<AiFormField, number>>({
@@ -167,6 +198,9 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
     const markFieldDirty = (field: AiFormField) => {
         dirtyFieldsRef.current.add(field);
         fieldEditVersionRef.current[field] += 1;
+        testRequestSeqRef.current += 1;
+        setIsTesting(false);
+        setTestingSignature(null);
         setSaveError(null);
         setTestFeedback(null);
     };
@@ -188,21 +222,30 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
 
     // Update local state when store changes unless a field has unsaved local edits
     React.useEffect(() => {
-        setForm((current) => ({
-            provider: dirtyFieldsRef.current.has('provider')
-                ? current.provider
-                : provider || 'openai',
-            providerConfigs: mergeProviderConfigsFromStore(
-                current.providerConfigs,
-                providerConfigs,
-            ),
-            customProviders: dirtyFieldsRef.current.has('customProviders')
-                ? current.customProviders
-                : cloneCustomProviders(customProviders),
-            activeCustomProviderId: dirtyFieldsRef.current.has('activeCustomProviderId')
-                ? current.activeCustomProviderId
-                : activeCustomProviderId || customProviders[0]?.id || '',
-        }));
+        setForm((current) => {
+            const nextForm: AiFormState = {
+                provider: dirtyFieldsRef.current.has('provider')
+                    ? current.provider
+                    : provider || 'openai',
+                providerConfigs: mergeProviderConfigsFromStore(
+                    current.providerConfigs,
+                    providerConfigs,
+                ),
+                customProviders: dirtyFieldsRef.current.has('customProviders')
+                    ? current.customProviders
+                    : cloneCustomProviders(customProviders),
+                activeCustomProviderId: dirtyFieldsRef.current.has('activeCustomProviderId')
+                    ? current.activeCustomProviderId
+                    : activeCustomProviderId || customProviders[0]?.id || '',
+            };
+            if (getActiveTestConfigSignature(nextForm) !== getActiveTestConfigSignature(current)) {
+                testRequestSeqRef.current += 1;
+                setIsTesting(false);
+                setTestingSignature(null);
+                setTestFeedback(null);
+            }
+            return nextForm;
+        });
     }, [provider, providerConfigs, customProviders, activeCustomProviderId]);
 
     const handleProviderChange = (nextProvider: ProviderId) => {
@@ -416,6 +459,8 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
     };
 
     const handleTestConnection = async () => {
+        const signatureAtStart = getActiveTestConfigSignature(form);
+        const reqId = ++testRequestSeqRef.current;
         setTestFeedback(null);
 
         const isBuiltIn = activeBuiltInProvider !== null && activeBuiltInDef && activeBuiltInConfig;
@@ -433,27 +478,45 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
             : normalizeModelName(activeCustomChannel?.modelName);
 
         if (isBuiltIn && !apiKey.trim()) {
-            setTestFeedback({ ok: false, message: t('editor.api_key_missing_openai') });
+            setTestFeedback({
+                signature: signatureAtStart,
+                ok: false,
+                message: t('editor.api_key_missing_openai'),
+            });
             return;
         }
         if (!isBuiltIn && (!baseUrl || !apiKey.trim())) {
-            setTestFeedback({ ok: false, message: t('editor.api_key_missing_custom') });
+            setTestFeedback({
+                signature: signatureAtStart,
+                ok: false,
+                message: t('editor.api_key_missing_custom'),
+            });
             return;
         }
 
         setIsTesting(true);
+        setTestingSignature(signatureAtStart);
         try {
             const permissionResult = await ensureHostPermission(baseUrl);
+            if (testRequestSeqRef.current !== reqId) {
+                return;
+            }
             if (!permissionResult.granted) {
                 if (permissionResult.reason === 'invalid_url') {
-                    setTestFeedback({ ok: false, message: t('editor.permission.invalid_url') });
+                    setTestFeedback({
+                        signature: signatureAtStart,
+                        ok: false,
+                        message: t('editor.permission.invalid_url'),
+                    });
                 } else if (permissionResult.reason === 'not_allowed') {
                     setTestFeedback({
+                        signature: signatureAtStart,
                         ok: false,
                         message: t('editor.permission.not_allowed', permissionResult.origin || ''),
                     });
                 } else {
                     setTestFeedback({
+                        signature: signatureAtStart,
                         ok: false,
                         message: t('editor.permission.denied', permissionResult.origin || ''),
                     });
@@ -467,18 +530,29 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                 baseURL: baseUrl,
                 modelName,
             });
+            if (testRequestSeqRef.current !== reqId) {
+                return;
+            }
             setTestFeedback({
+                signature: signatureAtStart,
                 ok: true,
                 message: t('settings.test.success', result.latencyMs, result.model),
             });
         } catch (error) {
-            const msg = error instanceof Error ? error.message : 'Unknown error';
+            if (testRequestSeqRef.current !== reqId) {
+                return;
+            }
+            const msg = sanitizeProviderErrorMessage(error, apiKey, undefined, 'Unknown error');
             setTestFeedback({
+                signature: signatureAtStart,
                 ok: false,
                 message: t('settings.test.failed', msg),
             });
         } finally {
-            setIsTesting(false);
+            if (testRequestSeqRef.current === reqId) {
+                setIsTesting(false);
+                setTestingSignature(null);
+            }
         }
     };
 
@@ -504,6 +578,10 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
     const isActiveConfigured = activeBuiltInProvider
         ? Boolean(activeBuiltInConfig?.apiKey?.trim())
         : Boolean(activeCustomChannel?.baseUrl?.trim() && activeCustomChannel?.apiKey?.trim());
+    const currentTestSignature = getActiveTestConfigSignature(form);
+    const visibleTestFeedback =
+        testFeedback && testFeedback.signature === currentTestSignature ? testFeedback : null;
+    const visibleIsTesting = isTesting && testingSignature === currentTestSignature;
 
     return (
         <div className="flex flex-col h-screen bg-bg-primary text-text-primary">
@@ -923,21 +1001,23 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                                 </p>
                             )}
 
-                            {testFeedback && (
+                            {visibleTestFeedback && (
                                 <div
                                     className={`flex items-start gap-1.5 px-2.5 py-2 rounded-lg text-[11px] leading-snug border ${
-                                        testFeedback.ok
+                                        visibleTestFeedback.ok
                                             ? 'bg-[#00ba7c]/10 border-[#00ba7c]/30 text-[#00ba7c]'
                                             : 'bg-[#f4212e]/10 border-[#f4212e]/30 text-[#f4212e]'
                                     }`}
-                                    role={testFeedback.ok ? 'status' : 'alert'}
+                                    role={visibleTestFeedback.ok ? 'status' : 'alert'}
                                 >
-                                    {testFeedback.ok ? (
+                                    {visibleTestFeedback.ok ? (
                                         <CheckCircle2 size={13} className="shrink-0 mt-0.5" />
                                     ) : (
                                         <AlertCircle size={13} className="shrink-0 mt-0.5" />
                                     )}
-                                    <span className="break-words">{testFeedback.message}</span>
+                                    <span className="break-words">
+                                        {visibleTestFeedback.message}
+                                    </span>
                                 </div>
                             )}
 
@@ -947,9 +1027,9 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                                     variant="secondary"
                                     size="sm"
                                     onClick={handleTestConnection}
-                                    isLoading={isTesting}
+                                    isLoading={visibleIsTesting}
                                 >
-                                    {isTesting ? t('settings.testing') : t('settings.test')}
+                                    {visibleIsTesting ? t('settings.testing') : t('settings.test')}
                                 </Button>
                                 <Button size="sm" onClick={handleSaveSettings} isLoading={isSaving}>
                                     {t('settings.save')}
