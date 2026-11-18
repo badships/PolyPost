@@ -82,24 +82,26 @@ const sendProxyFetch = (payload: ProxyFetchRequest): Promise<ProxyFetchResponse>
         );
     }
 
-    try {
-        const maybePromise = webext.runtime.sendMessage(payload as any) as any;
-        if (maybePromise && typeof maybePromise.then === 'function') {
-            return maybePromise as Promise<ProxyFetchResponse>;
-        }
-    } catch (error) {
-        return Promise.reject(error);
+    const g = globalThis as any;
+    if (g.browser?.runtime?.sendMessage) {
+        return (g.browser.runtime.sendMessage(payload) as Promise<ProxyFetchResponse>).catch(
+            (error) => Promise.reject(error),
+        );
     }
 
     return new Promise((resolve, reject) => {
-        webext.runtime.sendMessage(payload as any, (response) => {
-            if (webext.runtime.lastError) {
-                reject(new Error(webext.runtime.lastError.message));
-                return;
-            }
+        try {
+            webext.runtime.sendMessage(payload as any, (response) => {
+                if (webext.runtime.lastError) {
+                    reject(new Error(webext.runtime.lastError.message));
+                    return;
+                }
 
-            resolve(response as ProxyFetchResponse);
-        });
+                resolve(response as ProxyFetchResponse);
+            });
+        } catch (error) {
+            reject(error);
+        }
     });
 };
 
@@ -127,7 +129,14 @@ export const proxyFetch: typeof fetch = async (input, init) => {
         },
     });
 
-    return new Response(response.body, {
+    if (!response || response.status < 200 || response.status > 599) {
+        throw new TypeError(response?.statusText || 'Network error');
+    }
+
+    const isNullBodyStatus =
+        response.status === 204 || response.status === 205 || response.status === 304;
+
+    return new Response(isNullBodyStatus ? null : response.body, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,

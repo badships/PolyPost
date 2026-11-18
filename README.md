@@ -9,23 +9,29 @@ One codebase builds extensions for Chrome, Firefox, and Safari.
 
 - Generate, polish, and translate social content (multi-language)
 - Main app UI (Dashboard / Editor / Settings)
+- Customizable polish prompt templates (`Prompts`) and configurable OpenAI / custom model selection (built-in presets such as `gpt-5.4-mini` or any custom model ID)
+- Quick Translate tool for one-off reply translation without creating posts
+- In-page X/Twitter Follower Filter for `/followers`, `/verified_followers`, and `/following` lists (mutuals, non-followers, verified/unverified)
+- Bilingual UI (`English` / `简体中文`) and theme switching (`Light` / `Dark` / `System`)
 - Browser-native entry behavior:
-  - Chrome: popup entry + side panel support
-  - Firefox: toolbar click opens native sidebar (`sidebar_action`)
-  - Safari: toolbar click toggles an in-page floating panel on X/Twitter
+    - Chrome: toolbar click opens native side panel (`sidePanel`)
+    - Firefox: toolbar click opens native sidebar (`sidebar_action`)
+    - Safari: toolbar click toggles an in-page floating panel on X/Twitter
 - Safari floating panel supports drag-to-resize width and falls back to a popup window if embedding is unavailable
 - Works with OpenAI and OpenAI-compatible providers
 
 ## Project Structure
 
-- `src/background/`: Service Worker entry
-- `src/popup/`: popup UI
-- `src/sidepanel/`: main app UI
-- `src/components/`: shared components
-- `src/services/`: OpenAI / Storage / Prompt helpers
-- `src/store/`: Zustand state slices
-- `src/styles/`: Tailwind + global styles
-- `public/`: static assets
+- `src/background/`: Service worker / background script entry
+- `src/sidepanel/`: Main app UI (Dashboard, Editor, Settings, Prompts, Quick Translate, Follower Filter)
+- `src/content/`: X/Twitter content scripts (`followersFilter.ts`, `floatingAppHost.ts`)
+- `src/components/`: Shared UI, layout, library, and editor components
+- `src/services/`: OpenAI, WebExtension storage, permissions, proxy fetch, prompts, and Twitter intent helpers
+- `src/store/`: Zustand state slices (`postsStore`, `foldersStore`, `settingsStore`, `uiStore`)
+- `src/hooks/` & `src/i18n/`: Typed translation hook and `en` / `zh` locale dictionaries
+- `src/types/` & `src/utils/`: TypeScript definitions, utilities, and dev mock data seeder
+- `src/styles/`: Tailwind + global theme styles
+- `public/`: Static assets (`icons/`)
 
 ## Development & Build
 
@@ -41,12 +47,12 @@ Development (Vite + CRXJS):
 npm run dev
 ```
 
-Targeted development:
+Targeted development (`dev:chrome` runs the Vite/CRXJS dev server; `dev:firefox` and `dev:safari` run `vite build --watch` to keep `dist/firefox` and `dist/safari` runnable as extension bundles):
 
 ```bash
-npm run dev:chrome
-npm run dev:firefox
-npm run dev:safari
+npm run dev:chrome   # Vite + CRXJS dev server
+npm run dev:firefox  # vite build --watch -> dist/firefox
+npm run dev:safari   # vite build --watch -> dist/safari
 ```
 
 Production build (includes type-check):
@@ -63,10 +69,21 @@ npm run build:firefox  # dist/firefox
 npm run build:safari   # dist/safari (WebExtension folder for Safari converter)
 ```
 
-Preview production build:
+Preview production build (open `/src/sidepanel/index.html` in your browser):
 
 ```bash
 npm run preview
+npm run preview:chrome
+npm run preview:firefox
+npm run preview:safari
+```
+
+Lint & format:
+
+```bash
+npm run lint
+npm run format
+npm run format:check
 ```
 
 ## Load in Chrome
@@ -115,17 +132,17 @@ xcrun safari-web-extension-converter dist/safari
 
 3. Open the generated project in Xcode and run the app target once (`⌘R`)
 4. In Safari:
-   - Enable developer menu (`Settings > Advanced`)
-   - Enable `Develop > Allow Unsigned Extensions`
-   - Enable the extension in `Settings > Extensions`
+    - Enable developer menu (`Settings > Advanced`)
+    - Enable `Develop > Allow Unsigned Extensions`
+    - Enable the extension in `Settings > Extensions`
 5. Open `x.com` or `twitter.com` and click the toolbar icon:
-   - First click: show floating panel
-   - Second click: hide floating panel
-   - Drag the panel's left edge to resize width
+    - First click: show floating panel
+    - Second click: hide floating panel
+    - Drag the panel's left edge to resize width
 
 ## Configuration & Security
 
-- API keys are entered via Settings and stored in Chrome Storage; do not hardcode secrets.
+- API keys are entered via Settings and stored in browser extension storage (`storage.local`, and `storage.sync` when available); do not hardcode secrets.
 - If you add permissions, update `manifest.json` and explain the purpose.
 
 ## Contributing

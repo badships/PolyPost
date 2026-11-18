@@ -54,7 +54,10 @@ const isXPage = (): boolean => {
 };
 
 const getMaxAllowedWidth = (): number => {
-    return Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, window.innerWidth - VIEWPORT_MARGIN));
+    return Math.max(
+        MIN_PANEL_WIDTH,
+        Math.min(MAX_PANEL_WIDTH, window.innerWidth - VIEWPORT_MARGIN),
+    );
 };
 
 const clampPanelWidth = (width: number): number => {

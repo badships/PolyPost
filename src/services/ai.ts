@@ -2,9 +2,34 @@ import OpenAI from 'openai';
 import type { Language } from '@/types';
 import { getTranslationPrompt, LANGUAGE_FULL_NAMES } from './prompts';
 import { proxyFetch } from './proxyFetch';
-import { normalizeModelName } from './models';
+import { normalizeModelName, supportsCustomTemperature, usesMaxCompletionTokens } from './models';
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+
+const STANDARD_MAX_TOKENS = 300;
+const REASONING_MAX_COMPLETION_TOKENS = 2048;
+
+const normalizeBaseUrl = (baseURL?: string): string => {
+    const trimmed = baseURL?.trim().replace(/\/+$/, '');
+    return trimmed || DEFAULT_OPENAI_BASE_URL;
+};
+
+const isCustomApiEndpoint = (baseURL?: string): boolean => {
+    if (!baseURL?.trim()) {
+        return false;
+    }
+
+    const normalized = normalizeBaseUrl(baseURL);
+    if (normalized === DEFAULT_OPENAI_BASE_URL) {
+        return false;
+    }
+
+    try {
+        return new URL(normalized).hostname.toLowerCase() !== 'api.openai.com';
+    } catch {
+        return true;
+    }
+};
 
 interface AIResponse {
     content: string;
@@ -24,8 +49,8 @@ export class AIService {
     }
 
     private getClient(apiKey: string, baseURL?: string): OpenAI {
-        const resolvedBaseUrl = baseURL || DEFAULT_OPENAI_BASE_URL;
-        const useProxyFetch = resolvedBaseUrl !== DEFAULT_OPENAI_BASE_URL;
+        const resolvedBaseUrl = normalizeBaseUrl(baseURL);
+        const useProxyFetch = isCustomApiEndpoint(baseURL);
         const configKey = `${apiKey}|${resolvedBaseUrl}|${useProxyFetch ? 'proxy' : 'direct'}`;
 
         if (!this.client || this.clientConfigKey !== configKey) {
@@ -38,6 +63,18 @@ export class AIService {
             this.clientConfigKey = configKey;
         }
         return this.client;
+    }
+
+    private extractCompletionText(response: OpenAI.Chat.Completions.ChatCompletion): string {
+        const choice = response.choices[0];
+        const text = choice?.message?.content?.trim() || '';
+        if (!text) {
+            throw new Error('AI returned an empty response. Please try again.');
+        }
+        if (choice?.finish_reason === 'length') {
+            throw new Error('AI response was truncated before completion. Please try again.');
+        }
+        return text;
     }
 
     /**
@@ -74,8 +111,10 @@ Rewritten tweet:`;
 
         prompt = `${prompt}\n\n${this.getLanguageGuardrail()}`;
 
+        let response: OpenAI.Chat.Completions.ChatCompletion;
         try {
-            const response = await client.chat.completions.create({
+            const isCustomEndpoint = isCustomApiEndpoint(baseURL);
+            response = await client.chat.completions.create({
                 model: resolvedModelName,
                 messages: [
                     {
@@ -88,24 +127,26 @@ Rewritten tweet:`;
                         content: prompt,
                     },
                 ],
-                max_tokens: 300,
-                temperature: 0.7,
+                ...(usesMaxCompletionTokens(resolvedModelName, isCustomEndpoint)
+                    ? { max_completion_tokens: REASONING_MAX_COMPLETION_TOKENS }
+                    : { max_tokens: STANDARD_MAX_TOKENS }),
+                ...(supportsCustomTemperature(resolvedModelName) ? { temperature: 0.7 } : {}),
             });
-
-            const generatedContent = response.choices[0]?.message?.content?.trim() || '';
-
-            // Calculate confidence based on response quality
-            const confidence = this.calculateConfidence(content, generatedContent);
-
-            return {
-                content: generatedContent,
-                confidence,
-                description: 'Polished content', // Description handling needs update in caller
-            };
         } catch (error) {
             console.error('Polish error:', error);
             throw new Error('Failed to polish content. Please check your API key and try again.');
         }
+
+        const generatedContent = this.extractCompletionText(response);
+
+        // Calculate confidence based on response quality
+        const confidence = this.calculateConfidence(content, generatedContent);
+
+        return {
+            content: generatedContent,
+            confidence,
+            description: 'Polished content', // Description handling needs update in caller
+        };
     }
 
     /**
@@ -126,8 +167,10 @@ Rewritten tweet:`;
         const resolvedModelName = normalizeModelName(modelName);
         const prompt = getTranslationPrompt(content, targetLanguage);
 
+        let response: OpenAI.Chat.Completions.ChatCompletion;
         try {
-            const response = await client.chat.completions.create({
+            const isCustomEndpoint = isCustomApiEndpoint(baseURL);
+            response = await client.chat.completions.create({
                 model: resolvedModelName,
                 messages: [
                     {
@@ -140,23 +183,25 @@ Rewritten tweet:`;
                         content: prompt,
                     },
                 ],
-                max_tokens: 300,
-                temperature: 0.3, // Lower temperature for more accurate translation
+                ...(usesMaxCompletionTokens(resolvedModelName, isCustomEndpoint)
+                    ? { max_completion_tokens: REASONING_MAX_COMPLETION_TOKENS }
+                    : { max_tokens: STANDARD_MAX_TOKENS }),
+                ...(supportsCustomTemperature(resolvedModelName) ? { temperature: 0.3 } : {}),
             });
-
-            const translatedContent = response.choices[0]?.message?.content?.trim() || '';
-
-            return {
-                content: translatedContent,
-                confidence: 95, // High confidence for translation
-                description: `Accurate translation to ${LANGUAGE_FULL_NAMES[targetLanguage]}`,
-            };
         } catch (error) {
             console.error('Translation error:', error);
             throw new Error(
                 'Failed to translate content. Please check your API key and try again.',
             );
         }
+
+        const translatedContent = this.extractCompletionText(response);
+
+        return {
+            content: translatedContent,
+            confidence: 95, // High confidence for translation
+            description: `Accurate translation to ${LANGUAGE_FULL_NAMES[targetLanguage]}`,
+        };
     }
 
     /**

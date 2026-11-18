@@ -144,7 +144,7 @@ export const en = {
     'settings.provider.openai': 'OpenAI',
     'settings.provider.custom': 'Custom (OpenAI Compatible)',
     'settings.permission_hint':
-        'When you use a new API domain for the first time, Chrome will ask for permission to access it.',
+        'When you use a new API domain for the first time, your browser will ask for permission to access it.',
     'settings.customUrl.label': 'API Base URL',
     'settings.customUrl.placeholder': 'https://api.example.com/v1',
     'settings.customKey.label': 'API Key',
@@ -171,5 +171,33 @@ export const en = {
     'settings.prompts.validation.last': 'Cannot delete the last prompt',
     'settings.prompts.set_default': 'Set as Default',
     'settings.prompts.default_label': 'Default',
+    'settings.prompts.delete_confirm': 'Are you sure you want to delete this prompt?',
+    'settings.prompts.form.placeholder_hint':
+        "Use {content} as a placeholder for the user's input text.",
     'nav.prompts': 'Prompts',
+
+    // Posts & Folders
+    'actions.cancel': 'Cancel',
+    'post.status.draft': 'Draft',
+    'post.status.scheduled': 'Scheduled',
+    'post.status.posted': 'Posted',
+    'post.empty': 'Empty post...',
+    'post.move_to_folder': 'Move to folder',
+    'post.move_modal.title': 'Move to Folder',
+    'post.no_folder': 'No folder',
+    'post.delete_confirm': 'Are you sure you want to delete this post?',
+    'post.list.content': 'Content',
+    'post.list.status': 'Status',
+    'post.list.folder': 'Folder',
+    'post.list.updated': 'Updated',
+    'folder.modal.create_title': 'New Folder',
+    'folder.modal.edit_title': 'Edit Folder',
+    'folder.modal.name_label': 'Folder Name',
+    'folder.modal.name_placeholder': 'Enter folder name',
+    'folder.modal.color_label': 'Color',
+    'folder.modal.create_submit': 'Create Folder',
+    'folder.modal.save_submit': 'Save Changes',
+    'folder.delete.title': 'Delete Folder',
+    'folder.delete.message':
+        'Are you sure you want to delete this folder? Posts in this folder will not be deleted but will be removed from this folder.',
 };

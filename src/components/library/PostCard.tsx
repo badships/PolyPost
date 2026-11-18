@@ -5,6 +5,7 @@ import type { Post, Variant } from '@/types';
 import { truncateText, formatRelativeTime } from '@/utils';
 import { LANGUAGE_CODES } from '@/types';
 import { useFoldersStore, usePostsStore } from '@/store';
+import { useTranslation } from '@/hooks/useTranslation';
 
 interface PostCardProps {
     post: Post;
@@ -17,6 +18,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
     const [showMoveModal, setShowMoveModal] = useState(false);
     const { folders } = useFoldersStore();
     const { updatePost, deletePost } = usePostsStore();
+    const { t, language } = useTranslation();
 
     // Get unique languages from variants
     const languages = [...new Set(variants.filter((v) => v.language).map((v) => v.language!))]
@@ -29,6 +31,12 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
         posted: 'posted' as const,
     };
 
+    const statusLabels = {
+        draft: t('post.status.draft'),
+        scheduled: t('post.status.scheduled'),
+        posted: t('post.status.posted'),
+    };
+
     const handleMoveToFolder = async (folderId: string | null) => {
         await updatePost(post.id, { folderId });
         setShowMoveModal(false);
@@ -36,7 +44,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
     };
 
     const handleDelete = async () => {
-        if (confirm('Are you sure you want to delete this post?')) {
+        if (confirm(t('post.delete_confirm'))) {
             await deletePost(post.id);
         }
         setShowMenu(false);
@@ -49,7 +57,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
             <Card hoverable onClick={onClick} className="p-4 flex flex-col gap-3 relative">
                 {/* Header with status */}
                 <div className="flex items-center justify-between">
-                    <Badge variant={statusVariant[post.status]}>{post.status.toUpperCase()}</Badge>
+                    <Badge variant={statusVariant[post.status]}>{statusLabels[post.status]}</Badge>
                     <div className="relative">
                         <button
                             onClick={(e) => {
@@ -75,14 +83,14 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
                                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-text-primary hover:bg-bg-tertiary"
                                 >
                                     <FolderInput size={14} />
-                                    Move to folder
+                                    {t('post.move_to_folder')}
                                 </button>
                                 <button
                                     onClick={handleDelete}
                                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-bg-tertiary"
                                 >
                                     <Trash2 size={14} />
-                                    Delete
+                                    {t('actions.delete')}
                                 </button>
                             </div>
                         )}
@@ -91,7 +99,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
 
                 {/* Content preview */}
                 <p className="text-text-primary text-sm leading-relaxed flex-1">
-                    {truncateText(post.sourceContent, 120) || 'Empty post...'}
+                    {truncateText(post.sourceContent, 120) || t('post.empty')}
                 </p>
 
                 {/* Footer */}
@@ -112,7 +120,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
 
                     {/* Time */}
                     <span className="text-text-muted text-xs whitespace-nowrap ml-2">
-                        {formatRelativeTime(post.updatedAt)}
+                        {formatRelativeTime(post.updatedAt, language)}
                     </span>
                 </div>
             </Card>
@@ -121,7 +129,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
             <Modal
                 isOpen={showMoveModal}
                 onClose={() => setShowMoveModal(false)}
-                title="Move to Folder"
+                title={t('post.move_modal.title')}
                 size="sm"
             >
                 <div className="space-y-2">
@@ -130,7 +138,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
                         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-left
               ${!post.folderId ? 'bg-accent/10 text-accent' : 'text-text-primary hover:bg-bg-tertiary'}`}
                     >
-                        No folder
+                        {t('post.no_folder')}
                     </button>
                     {folders.map((folder) => (
                         <button
@@ -149,7 +157,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
                 </div>
                 <div className="flex justify-end mt-4">
                     <Button variant="ghost" onClick={() => setShowMoveModal(false)}>
-                        Cancel
+                        {t('actions.cancel')}
                     </Button>
                 </div>
             </Modal>

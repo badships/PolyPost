@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Modal, Button, Input } from '@/components/ui';
 import { useFoldersStore, useUIStore } from '@/store';
 import { FOLDER_COLORS } from '@/types';
+import { useTranslation } from '@/hooks/useTranslation';
 
 export const FolderModal: React.FC = () => {
     const { isFolderModalOpen, closeFolderModal, folderModalMode, editingFolderId } = useUIStore();
     const { createFolder, updateFolder, folders } = useFoldersStore();
+    const { t } = useTranslation();
 
     // Initial state setup
     const initialColor = FOLDER_COLORS[0];
@@ -58,15 +60,21 @@ export const FolderModal: React.FC = () => {
         closeFolderModal();
     };
 
-    const title = folderModalMode === 'create' ? 'New Folder' : 'Edit Folder';
-    const submitText = folderModalMode === 'create' ? 'Create Folder' : 'Save Changes';
+    const title =
+        folderModalMode === 'create'
+            ? t('folder.modal.create_title')
+            : t('folder.modal.edit_title');
+    const submitText =
+        folderModalMode === 'create'
+            ? t('folder.modal.create_submit')
+            : t('folder.modal.save_submit');
 
     return (
         <Modal isOpen={isFolderModalOpen} onClose={handleClose} title={title} size="sm">
             <form onSubmit={handleSubmit} className="space-y-4">
                 <Input
-                    label="Folder Name"
-                    placeholder="Enter folder name"
+                    label={t('folder.modal.name_label')}
+                    placeholder={t('folder.modal.name_placeholder')}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     autoFocus
@@ -74,7 +82,7 @@ export const FolderModal: React.FC = () => {
 
                 <div>
                     <label className="block text-sm font-medium text-text-primary mb-2">
-                        Color
+                        {t('folder.modal.color_label')}
                     </label>
                     <div className="flex flex-wrap gap-2">
                         {FOLDER_COLORS.map((color) => (
@@ -94,7 +102,7 @@ export const FolderModal: React.FC = () => {
 
                 <div className="flex justify-end gap-3 pt-2">
                     <Button type="button" variant="ghost" onClick={handleClose}>
-                        Cancel
+                        {t('actions.cancel')}
                     </Button>
                     <Button type="submit" isLoading={isLoading} disabled={!name.trim()}>
                         {submitText}

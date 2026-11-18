@@ -1,7 +1,7 @@
 // Background service worker for PolyPost WebExtension (Chrome/Firefox/Safari)
 
-import { DEFAULT_SETTINGS } from '@/services/settingsDefaults';
 import { getActiveTab, getWebExt, openPolyPostWindow } from '@/services/webext';
+import { handleStorageRpcMessage } from '@/services/storage';
 
 const webext = getWebExt();
 const X_HOSTS = ['x.com', 'twitter.com'];
@@ -106,31 +106,6 @@ sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {
 webext?.runtime?.onInstalled?.addListener((details) => {
     if (details.reason === 'install') {
         console.log('PolyPost extension installed');
-
-        // Initialize default settings
-        const defaultSettings = DEFAULT_SETTINGS;
-
-        const settingsKey = 'polypost_settings';
-        const payload = {
-            // Keep the canonical key used by `src/services/storage.ts`.
-            [settingsKey]: defaultSettings,
-            // Back-compat: older key was accidentally used in early versions.
-            settings: defaultSettings,
-        };
-
-        const syncPromise = webext?.storage?.sync?.set(payload);
-        if (syncPromise) {
-            syncPromise.catch((error) => {
-                console.warn('Failed to initialize default settings (sync)', error);
-            });
-        }
-
-        const localPromise = webext?.storage?.local?.set(payload);
-        if (localPromise) {
-            localPromise.catch((error) => {
-                console.warn('Failed to initialize default settings (local)', error);
-            });
-        }
     }
 });
 
@@ -153,7 +128,12 @@ const isProxyFetchMessage = (message: unknown): message is ProxyFetchMessage => 
     return candidate.type === 'proxyFetch' && typeof candidate.url === 'string';
 };
 
-webext?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+webext?.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
+    const rpcHandled = handleStorageRpcMessage(message, sender, sendResponse);
+    if (rpcHandled !== undefined) {
+        return rpcHandled;
+    }
+
     if (!isProxyFetchMessage(message)) {
         return undefined;
     }

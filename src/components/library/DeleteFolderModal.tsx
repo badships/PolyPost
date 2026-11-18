@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { Modal, Button } from '@/components/ui';
 import { useFoldersStore, useUIStore } from '@/store';
+import { useTranslation } from '@/hooks/useTranslation';
 
 export const DeleteFolderModal: React.FC = () => {
     const { isDeleteFolderModalOpen, closeDeleteFolderModal, folderToDeleteId } = useUIStore();
     const { deleteFolder } = useFoldersStore();
+    const { t } = useTranslation();
     const [isLoading, setIsLoading] = useState(false);
 
     const handleDelete = async () => {
@@ -25,26 +27,23 @@ export const DeleteFolderModal: React.FC = () => {
         <Modal
             isOpen={isDeleteFolderModalOpen}
             onClose={closeDeleteFolderModal}
-            title="Delete Folder"
+            title={t('folder.delete.title')}
             size="sm"
         >
             <div className="space-y-4">
-                <p className="text-text-secondary">
-                    Are you sure you want to delete this folder? Posts in this folder will not be
-                    deleted but will be removed from this folder.
-                </p>
+                <p className="text-text-secondary">{t('folder.delete.message')}</p>
 
                 <div className="flex justify-end gap-3 pt-2">
                     <Button variant="ghost" onClick={closeDeleteFolderModal}>
-                        Cancel
+                        {t('actions.cancel')}
                     </Button>
                     <Button
-                        variant="primary" // Assuming primary assumes destructive action isn't a variant, or using default style
-                        className="bg-red-500 hover:bg-red-600 text-white" // Override for destructive look
+                        variant="primary"
+                        className="bg-red-500 hover:bg-red-600 text-white"
                         onClick={handleDelete}
                         isLoading={isLoading}
                     >
-                        Delete
+                        {t('actions.delete')}
                     </Button>
                 </div>
             </div>

@@ -1,16 +1,16 @@
 import { create } from 'zustand';
 import type { Settings, Language, PolishPrompt } from '@/types';
 import { storage } from '@/services/storage';
-import { POLISH_PROMPTS, POLISH_TEMPLATE_DESCRIPTIONS } from '@/services/prompts';
-import { POLISH_TEMPLATE_NAMES } from '@/types';
-import { DEFAULT_SETTINGS } from '@/services/settingsDefaults';
+import { buildDefaultPrompts, DEFAULT_SETTINGS } from '@/services/settingsDefaults';
 import { normalizeModelName } from '@/services/models';
+import { getWebExt } from '@/services/webext';
 
 interface SettingsState extends Settings {
     isLoading: boolean;
 
     // Actions
     loadSettings: () => Promise<void>;
+    updateSettings: (updates: Partial<Settings>) => Promise<void>;
     setOpenaiApiKey: (key: string) => Promise<void>;
     setProvider: (provider: 'openai' | 'custom') => Promise<void>;
     setCustomApiUrl: (url: string) => Promise<void>;
@@ -28,131 +28,314 @@ interface SettingsState extends Settings {
     resetPrompts: () => Promise<void>;
 }
 
-// Helper to generate default prompts from constants
-const getDefaultPrompts = (): PolishPrompt[] => {
-    return Object.entries(POLISH_PROMPTS).map(([key, content]) => ({
-        id: key,
-        template: key,
-        name: POLISH_TEMPLATE_NAMES[key as keyof typeof POLISH_TEMPLATE_NAMES] || key,
-        description:
-            POLISH_TEMPLATE_DESCRIPTIONS[key as keyof typeof POLISH_TEMPLATE_DESCRIPTIONS] || '',
-        content,
-    }));
+const SETTING_KEYS: (keyof Settings)[] = [
+    'openaiApiKey',
+    'provider',
+    'customApiUrl',
+    'customApiKey',
+    'modelName',
+    'defaultLanguage',
+    'defaultPolishTemplate',
+    'theme',
+    'uiLanguage',
+    'prompts',
+];
+
+const inFlightCounts = new Map<keyof Settings, number>();
+const committedMutations = new Map<keyof Settings, { version: number; value: unknown }>();
+const fieldMutationSeq = new Map<keyof Settings, number>();
+const committedValues = new Map<keyof Settings, unknown>();
+let mutationVersion = 0;
+let loadSeq = 0;
+
+const assignSettingField = (
+    target: Partial<Settings>,
+    key: keyof Settings,
+    value: unknown,
+): void => {
+    (target as Record<keyof Settings, unknown>)[key] = value;
 };
 
-export const useSettingsStore = create<SettingsState>((set, get) => ({
-    openaiApiKey: '',
-    provider: 'openai',
-    customApiUrl: '',
-    customApiKey: '',
-    modelName: DEFAULT_SETTINGS.modelName,
-    defaultLanguage: 'en',
-    defaultPolishTemplate: 'professional',
-    theme: 'dark',
-    uiLanguage: 'en',
-    prompts: [], // Will be populated on load
-    isLoading: false,
+export const useSettingsStore = create<SettingsState>((set, get) => {
+    const applySettingsMutation = async (
+        fields: (keyof Settings)[],
+        optimisticPatch: Partial<Settings>,
+        storageOp: () => Promise<Settings>,
+    ): Promise<void> => {
+        const currentState = get();
+        const startLoadSeq = loadSeq;
+        const myFieldSeq = new Map<keyof Settings, number>();
 
-    loadSettings: async () => {
-        set({ isLoading: true });
+        for (const field of fields) {
+            const prevCount = inFlightCounts.get(field) ?? 0;
+            if (prevCount === 0) {
+                committedValues.set(field, currentState[field]);
+            }
+            inFlightCounts.set(field, prevCount + 1);
+            const nextSeq = (fieldMutationSeq.get(field) ?? 0) + 1;
+            fieldMutationSeq.set(field, nextSeq);
+            myFieldSeq.set(field, nextSeq);
+        }
+
+        if (Object.keys(optimisticPatch).length > 0) {
+            set(optimisticPatch);
+        }
+
         try {
-            const settings = await storage.getSettings();
+            const saved = await storageOp();
+            const version = ++mutationVersion;
+            const latestState = get();
+            const nextState: Partial<Settings> = {};
+            const fieldSet = new Set<keyof Settings>(fields);
 
-            // Initialize prompts if they don't exist in storage
-            let prompts = settings.prompts;
-            if (!prompts || prompts.length === 0) {
-                prompts = getDefaultPrompts();
-                // We should probably save these defaults to storage immediately so they persist?
-                // Alternatively, component logic decides. Let's save them to ensure consistency.
-                // However, we don't want to overwrite if the user actually deleted everything (but logic prevents that).
-                // So if it's undefined/null, we set defaults.
+            for (const field of fields) {
+                committedValues.set(field, saved[field]);
+                const otherCount = Math.max(0, (inFlightCounts.get(field) ?? 1) - 1);
+                const isLatestOnField = fieldMutationSeq.get(field) === myFieldSeq.get(field);
+                if (isLatestOnField || otherCount === 0) {
+                    committedMutations.set(field, { version, value: saved[field] });
+                    assignSettingField(nextState, field, saved[field]);
+                }
             }
 
-            set({ ...settings, prompts, isLoading: false });
+            if (loadSeq === startLoadSeq) {
+                for (const key of SETTING_KEYS) {
+                    if (fieldSet.has(key)) {
+                        continue;
+                    }
+                    if ((inFlightCounts.get(key) ?? 0) === 0) {
+                        committedValues.set(key, saved[key]);
+                        assignSettingField(nextState, key, saved[key]);
+                    } else {
+                        assignSettingField(nextState, key, latestState[key]);
+                    }
+                }
+            }
+
+            if (Object.keys(nextState).length > 0) {
+                set(nextState);
+            }
         } catch (error) {
-            console.error('Failed to load settings:', error);
-            // Fallback to defaults
-            set({ prompts: getDefaultPrompts(), isLoading: false });
+            const rollback: Partial<Settings> = {};
+            for (const field of fields) {
+                const remaining = (inFlightCounts.get(field) ?? 1) - 1;
+                if (remaining <= 0) {
+                    assignSettingField(rollback, field, committedValues.get(field));
+                }
+            }
+            if (Object.keys(rollback).length > 0) {
+                set(rollback);
+            }
+            throw error;
+        } finally {
+            for (const field of fields) {
+                const nextCount = (inFlightCounts.get(field) ?? 1) - 1;
+                if (nextCount <= 0) {
+                    inFlightCounts.delete(field);
+                } else {
+                    inFlightCounts.set(field, nextCount);
+                }
+            }
         }
-    },
+    };
 
-    setOpenaiApiKey: async (key: string) => {
-        await storage.updateSettings({ openaiApiKey: key });
-        set({ openaiApiKey: key });
-    },
+    return {
+        openaiApiKey: '',
+        provider: 'openai',
+        customApiUrl: '',
+        customApiKey: '',
+        modelName: DEFAULT_SETTINGS.modelName,
+        defaultLanguage: 'en',
+        defaultPolishTemplate: 'professional',
+        theme: 'dark',
+        uiLanguage: 'en',
+        prompts: [], // Will be populated on load
+        isLoading: false,
 
-    setProvider: async (provider: 'openai' | 'custom') => {
-        await storage.updateSettings({ provider });
-        set({ provider });
-    },
+        loadSettings: async () => {
+            const currentLoadSeq = ++loadSeq;
+            const startVersion = mutationVersion;
+            set({ isLoading: true });
+            try {
+                const settings = await storage.getSettings();
+                if (currentLoadSeq !== loadSeq) {
+                    return;
+                }
 
-    setCustomApiUrl: async (url: string) => {
-        await storage.updateSettings({ customApiUrl: url });
-        set({ customApiUrl: url });
-    },
+                const currentState = get();
+                const hydrated: Settings = {
+                    ...settings,
+                };
 
-    setCustomApiKey: async (key: string) => {
-        await storage.updateSettings({ customApiKey: key });
-        set({ customApiKey: key });
-    },
+                for (const [key, entry] of committedMutations.entries()) {
+                    if (entry.version > startVersion) {
+                        assignSettingField(hydrated, key, entry.value);
+                    }
+                }
 
-    setModelName: async (modelName: string) => {
-        const normalizedModelName = normalizeModelName(modelName);
-        await storage.updateSettings({ modelName: normalizedModelName });
-        set({ modelName: normalizedModelName });
-    },
+                for (const key of SETTING_KEYS) {
+                    committedValues.set(key, hydrated[key]);
+                }
 
-    setDefaultLanguage: async (language: Language) => {
-        await storage.updateSettings({ defaultLanguage: language });
-        set({ defaultLanguage: language });
-    },
+                for (const [key, count] of inFlightCounts.entries()) {
+                    if (count > 0) {
+                        assignSettingField(hydrated, key, currentState[key]);
+                    }
+                }
 
-    setDefaultPolishTemplate: async (template: string) => {
-        await storage.updateSettings({ defaultPolishTemplate: template });
-        set({ defaultPolishTemplate: template });
-    },
+                set({ ...hydrated, isLoading: false });
+            } catch (error) {
+                if (currentLoadSeq !== loadSeq) {
+                    return;
+                }
+                console.error('Failed to load settings:', error);
+                const currentState = get();
+                set({
+                    prompts:
+                        currentState.prompts.length > 0
+                            ? currentState.prompts
+                            : buildDefaultPrompts(),
+                    isLoading: false,
+                });
+            }
+        },
 
-    setTheme: async (theme: 'dark' | 'light' | 'system') => {
-        set({ theme });
-        try {
-            await storage.updateSettings({ theme });
-        } catch (error) {
-            console.error('Failed to save theme setting:', error);
-        }
-    },
+        updateSettings: async (updates: Partial<Settings>) => {
+            const normalizedUpdates: Partial<Settings> = {
+                ...updates,
+                ...(updates.modelName !== undefined
+                    ? { modelName: normalizeModelName(updates.modelName) }
+                    : {}),
+            };
 
-    setUiLanguage: async (language: 'en' | 'zh') => {
-        await storage.updateSettings({ uiLanguage: language });
-        set({ uiLanguage: language });
-    },
+            const effectiveKeys = Object.keys(normalizedUpdates) as (keyof Settings)[];
+            if (effectiveKeys.length === 0) {
+                return;
+            }
 
-    addPrompt: async (prompt: PolishPrompt) => {
-        const { prompts } = get();
-        const newPrompts = [...prompts, prompt];
-        set({ prompts: newPrompts });
-        await storage.updateSettings({ prompts: newPrompts });
-    },
+            await applySettingsMutation(effectiveKeys, normalizedUpdates, () =>
+                storage.updateSettings(normalizedUpdates),
+            );
+        },
 
-    updatePrompt: async (updatedPrompt: PolishPrompt) => {
-        const { prompts } = get();
-        const newPrompts = prompts.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p));
-        set({ prompts: newPrompts });
-        await storage.updateSettings({ prompts: newPrompts });
-    },
+        setOpenaiApiKey: async (key: string) => {
+            await applySettingsMutation(['openaiApiKey'], { openaiApiKey: key }, () =>
+                storage.updateSettings({ openaiApiKey: key }),
+            );
+        },
 
-    deletePrompt: async (id: string) => {
-        const { prompts } = get();
-        if (prompts.length <= 1) {
-            throw new Error('Cannot delete the last prompt');
-        }
-        const newPrompts = prompts.filter((p) => p.id !== id);
-        set({ prompts: newPrompts });
-        await storage.updateSettings({ prompts: newPrompts });
-    },
+        setProvider: async (provider: 'openai' | 'custom') => {
+            await applySettingsMutation(['provider'], { provider }, () =>
+                storage.updateSettings({ provider }),
+            );
+        },
 
-    resetPrompts: async () => {
-        const defaultPrompts = getDefaultPrompts();
-        set({ prompts: defaultPrompts });
-        await storage.updateSettings({ prompts: defaultPrompts });
-    },
-}));
+        setCustomApiUrl: async (url: string) => {
+            await applySettingsMutation(['customApiUrl'], { customApiUrl: url }, () =>
+                storage.updateSettings({ customApiUrl: url }),
+            );
+        },
+
+        setCustomApiKey: async (key: string) => {
+            await applySettingsMutation(['customApiKey'], { customApiKey: key }, () =>
+                storage.updateSettings({ customApiKey: key }),
+            );
+        },
+
+        setModelName: async (modelName: string) => {
+            const normalizedModelName = normalizeModelName(modelName);
+            await applySettingsMutation(['modelName'], { modelName: normalizedModelName }, () =>
+                storage.updateSettings({ modelName: normalizedModelName }),
+            );
+        },
+
+        setDefaultLanguage: async (language: Language) => {
+            await applySettingsMutation(['defaultLanguage'], { defaultLanguage: language }, () =>
+                storage.updateSettings({ defaultLanguage: language }),
+            );
+        },
+
+        setDefaultPolishTemplate: async (template: string) => {
+            await applySettingsMutation(
+                ['defaultPolishTemplate'],
+                { defaultPolishTemplate: template },
+                () => storage.updateSettings({ defaultPolishTemplate: template }),
+            );
+        },
+
+        setTheme: async (theme: 'dark' | 'light' | 'system') => {
+            try {
+                await applySettingsMutation(['theme'], { theme }, () =>
+                    storage.updateSettings({ theme }),
+                );
+            } catch (error) {
+                console.error('Failed to save theme setting:', error);
+            }
+        },
+
+        setUiLanguage: async (language: 'en' | 'zh') => {
+            await applySettingsMutation(['uiLanguage'], { uiLanguage: language }, () =>
+                storage.updateSettings({ uiLanguage: language }),
+            );
+        },
+
+        addPrompt: async (prompt: PolishPrompt) => {
+            const { prompts } = get();
+            const exists = prompts.some((p) => p.id === prompt.id);
+            const newPrompts = exists
+                ? prompts.map((p) => (p.id === prompt.id ? prompt : p))
+                : [...prompts, prompt];
+            await applySettingsMutation(['prompts'], { prompts: newPrompts }, () =>
+                storage.addPrompt(prompt),
+            );
+        },
+
+        updatePrompt: async (updatedPrompt: PolishPrompt) => {
+            const { prompts } = get();
+            const newPrompts = prompts.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p));
+            await applySettingsMutation(['prompts'], { prompts: newPrompts }, () =>
+                storage.updatePrompt(updatedPrompt),
+            );
+        },
+
+        deletePrompt: async (id: string) => {
+            const { prompts, defaultPolishTemplate } = get();
+            if (prompts.length <= 1) {
+                throw new Error('Cannot delete the last prompt');
+            }
+            const newPrompts = prompts.filter((p) => p.id !== id);
+            const nextDefaultTemplate =
+                defaultPolishTemplate === id
+                    ? newPrompts[0]?.id || 'professional'
+                    : defaultPolishTemplate;
+            await applySettingsMutation(
+                ['prompts', 'defaultPolishTemplate'],
+                { prompts: newPrompts, defaultPolishTemplate: nextDefaultTemplate },
+                () => storage.deletePrompt(id),
+            );
+        },
+
+        resetPrompts: async () => {
+            const { defaultPolishTemplate } = get();
+            const defaultPrompts = buildDefaultPrompts();
+            const hasCurrentDefault = defaultPrompts.some((p) => p.id === defaultPolishTemplate);
+            const nextDefaultTemplate = hasCurrentDefault
+                ? defaultPolishTemplate
+                : defaultPrompts[0]?.id || 'professional';
+            await applySettingsMutation(
+                ['prompts', 'defaultPolishTemplate'],
+                { prompts: defaultPrompts, defaultPolishTemplate: nextDefaultTemplate },
+                () => storage.resetPrompts(),
+            );
+        },
+    };
+});
+
+getWebExt()?.storage?.onChanged?.addListener((changes, areaName) => {
+    if (
+        (areaName === undefined || areaName === 'local' || areaName === 'sync') &&
+        changes?.polypost_settings
+    ) {
+        void useSettingsStore.getState().loadSettings();
+    }
+});

@@ -6,7 +6,12 @@ import { resolve } from 'path';
 import baseManifest from './manifest.json';
 
 type TargetBrowser = 'chrome' | 'firefox' | 'safari';
-const X_MATCHES = ['https://x.com/*', 'https://*.x.com/*', 'https://twitter.com/*', 'https://*.twitter.com/*'];
+const X_MATCHES = [
+    'https://x.com/*',
+    'https://*.x.com/*',
+    'https://twitter.com/*',
+    'https://*.twitter.com/*',
+];
 
 const getTargetBrowser = (): TargetBrowser => {
     const candidate = (process.env.POLYPOST_BROWSER || process.env.TARGET_BROWSER || '')
@@ -20,7 +25,7 @@ const getTargetBrowser = (): TargetBrowser => {
     return 'chrome';
 };
 
-const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const getBackgroundForTarget = (target: TargetBrowser, manifest: any) => {
     const background = manifest?.background || {};
@@ -72,12 +77,15 @@ const addSafariFloatingHostScript = (manifest: any) => {
     });
 };
 
-const addSafariFloatingHostResources = (manifest: any) => {
+const addSafariFloatingHostResources = (manifest: any, command: 'build' | 'serve') => {
     if (!Array.isArray(manifest.web_accessible_resources)) {
         manifest.web_accessible_resources = [];
     }
 
-    const resources = ['src/sidepanel/index.html', 'assets/*', 'icons/*'];
+    const resources =
+        command === 'build'
+            ? ['src/sidepanel/index.html', 'assets/*', 'icons/*']
+            : ['assets/*', 'icons/*'];
     const exists = manifest.web_accessible_resources.some((entry: any) => {
         const entryResources = Array.isArray(entry?.resources) ? entry.resources : [];
         return resources.every((resource) => entryResources.includes(resource));
@@ -110,7 +118,7 @@ const sanitizeFirefoxInnerHtmlAssignments = async (target: TargetBrowser) => {
     const dynamicInnerHtmlPattern = /([A-Za-z_$][\w$]*)\.innerHTML=([A-Za-z_$][\w$]*);/g;
 
     for (const assetName of assetNames) {
-        if (!assetName.startsWith('globals-') || !assetName.endsWith('.js')) {
+        if (!assetName.endsWith('.js')) {
             continue;
         }
 
@@ -193,14 +201,24 @@ const sanitizeBuiltManifestPlugin = (target: TargetBrowser) => {
     };
 };
 
-const buildManifest = () => {
+const buildManifest = (command: 'build' | 'serve' = 'build') => {
     const target = getTargetBrowser();
     const manifest = clone(baseManifest) as any;
 
     manifest.background = getBackgroundForTarget(target, manifest);
 
+    if (command === 'serve' && target === 'chrome') {
+        manifest.content_security_policy = {
+            extension_pages:
+                "script-src 'self' http://localhost:5173; object-src 'self'; connect-src 'self' http://localhost:5173 ws://localhost:5173 https: http:;",
+        };
+    }
+
     if (target !== 'chrome') {
         delete manifest.side_panel;
+        manifest.options_ui = {
+            page: 'src/sidepanel/index.html',
+        };
         if (Array.isArray(manifest.permissions)) {
             manifest.permissions = manifest.permissions.filter((permission: string) => {
                 return permission !== 'sidePanel';
@@ -247,7 +265,7 @@ const buildManifest = () => {
     if (target === 'safari') {
         removeActionPopup(manifest);
         addSafariFloatingHostScript(manifest);
-        addSafariFloatingHostResources(manifest);
+        addSafariFloatingHostResources(manifest, command);
     }
 
     return manifest;
@@ -256,7 +274,14 @@ const buildManifest = () => {
 const target = getTargetBrowser();
 
 export default defineConfig({
-    plugins: [react(), crx({ manifest: buildManifest() }), sanitizeBuiltManifestPlugin(target)],
+    plugins: [
+        react(),
+        crx({
+            manifest: ({ command }) => buildManifest(command),
+            browser: target === 'chrome' ? 'chrome' : 'firefox',
+        }),
+        sanitizeBuiltManifestPlugin(target),
+    ],
     resolve: {
         alias: {
             '@': resolve(__dirname, 'src'),
@@ -279,7 +304,6 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 sidepanel: 'src/sidepanel/index.html',
-                popup: 'src/popup/index.html',
             },
         },
     },

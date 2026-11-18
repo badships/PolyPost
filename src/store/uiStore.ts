@@ -1,14 +1,7 @@
 import { create } from 'zustand';
-import type { ViewMode, LibraryFilter, DashboardView } from '@/types';
+import type { ViewMode, LibraryFilter, DashboardView, UIState } from '@/types';
 
-interface UIState {
-    viewMode: ViewMode;
-    libraryFilter: LibraryFilter;
-    selectedFolderId: string | null;
-    searchQuery: string;
-    currentPage: 'dashboard' | 'editor' | 'settings';
-    dashboardView: DashboardView;
-
+interface UIStoreState extends UIState {
     // Modal states
     isFolderModalOpen: boolean;
     folderModalMode: 'create' | 'edit';
@@ -38,7 +31,7 @@ interface UIState {
     closeTranslateModal: () => void;
 }
 
-export const useUIStore = create<UIState>((set) => ({
+export const useUIStore = create<UIStoreState>((set) => ({
     viewMode: 'grid',
     libraryFilter: 'all',
     selectedFolderId: null,

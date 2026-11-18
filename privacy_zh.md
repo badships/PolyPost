@@ -1,17 +1,17 @@
 # PolyPost 隐私政策
 
-**最后更新日期：** 2026年2月3日
+**最后更新日期：** 2026年11月18日
 
 ## 概述
 
-PolyPost（“我们”）是一款 Chrome 扩展，通过浏览器侧边栏帮助您创建与管理社交媒体内容，并提供可选的 AI 润色与翻译功能。我们不运营任何后端服务器或多用户系统。除您主动触发的第三方请求（如 AI 服务或 Twitter/X Web Intent）外，大部分功能完全在您的浏览器中运行。
+PolyPost（“我们”）是一款支持 Chrome、Firefox 和 Safari 的浏览器扩展，通过侧边栏或页面悬浮面板帮助您创建与管理社交媒体内容，并提供可选的 AI 润色与翻译功能。我们不运营任何后端服务器或多用户系统。除您主动触发的第三方请求（如 AI 服务或 Twitter/X Web Intent）外，大部分功能完全在您的浏览器中运行。
 
 ## 本地存储的数据
 
-PolyPost 使用 Chrome Storage 在本地保存数据：
+PolyPost 使用浏览器扩展存储（Extension Storage）在本地保存数据：
 
-- **内容数据**：帖子、草稿、变体与文件夹结构存储在 `chrome.storage.local`。
-- **设置数据**：默认语言、界面语言、主题、提示词、服务提供方选择、自定义 API 地址以及 API 密钥等设置，存储在 `chrome.storage.sync`（如启用同步）或本地。
+- **内容数据**：帖子、草稿、变体与文件夹结构存储在 `storage.local`。
+- **设置数据**：默认语言、界面语言、主题、提示词、服务提供方选择、自定义 API 地址、模型名称以及 API 密钥等设置，保存在 `storage.local`，并在浏览器支持且启用同步时通过 `storage.sync` 同步。
 
 我们不会在自己的服务器上接收或存储这些数据。
 
@@ -21,7 +21,7 @@ PolyPost 使用 Chrome Storage 在本地保存数据：
 
 1. **AI 功能（OpenAI 或兼容服务）**
     - 当您点击“润色”或“翻译”时，所选内容与相关参数会发送至您配置的 API 接口（默认 OpenAI 或兼容第三方）。
-    - API 密钥仅保存在本地，用于直接向该服务商进行认证请求。
+    - API 密钥保存在您的浏览器扩展存储中（写入 `storage.local`，并在支持且启用同步时通过 `storage.sync` 同步），仅用于直接向该服务商进行认证请求。
     - 我们不会接收或存储您的内容与 API 密钥。
     - 数据会按照所选服务商的 API 数据使用政策处理。
 
@@ -39,12 +39,12 @@ PolyPost 使用 Chrome Storage 在本地保存数据：
 PolyPost 仅请求运行所需的最小权限：
 
 - **`storage`**：用于本地保存草稿、文件夹、变体、提示词与设置。
-- **`sidePanel`**：用于在浏览器侧边栏中显示主界面。
-- **`tabs`**：用于读取当前标签页 URL，并在使用关注过滤快捷按钮时打开 X 页面。
-- **`scripting`**：用于在您点击注入按钮时向当前 X/Twitter 页面注入过滤面板。
+- **`sidePanel`**（Chrome）/ **`sidebar_action`**（Firefox）：用于在浏览器侧边栏中显示主界面。
+- **`tabs`**：用于读取当前标签页 URL、与 X/Twitter 内容脚本通信，并在使用关注过滤快捷按钮时打开 X 页面。
+- **主机权限（`https://api.openai.com/*`, `https://x.com/*`, `https://*.x.com/*`, `https://twitter.com/*`, `https://*.twitter.com/*`）与内容脚本**：用于连接默认 OpenAI 接口，并在 X/Twitter 页面中运行页内关注过滤面板（以及 Safari 下的悬浮面板宿主脚本）。
 - **可选主机权限（`http://*/*`, `https://*/*`）**：
-    - 仅用于连接您配置的 AI 接口域名（默认 OpenAI 或自定义服务）。
-    - 当需要新域名时，Chrome 会弹窗请求权限。
+    - 仅在您配置自定义 AI 接口域名时使用。
+    - 首次访问新域名时，浏览器会弹窗请求授权。
 
 ## 无中心服务器或分析
 
@@ -65,4 +65,4 @@ PolyPost 遵守 Chrome Web Store 的远程代码政策，**不执行任何远程
 
 ## 联系我们
 
-如有疑问，请通过以下方式联系我们：[您的联系邮箱]
+如有疑问，请通过 GitHub Issues 联系我们：https://github.com/badships/PolyPost/issues
