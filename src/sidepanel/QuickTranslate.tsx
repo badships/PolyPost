@@ -2,15 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { Button } from '@/components/ui';
 import { useSettingsStore } from '@/store';
 import { useTranslation } from '@/hooks/useTranslation';
-import { aiService, DEFAULT_OPENAI_BASE_URL } from '@/services/ai';
+import { aiService } from '@/services/ai';
+import { resolveActiveProviderConfig } from '@/services/settingsDefaults';
 import { ensureHostPermission } from '@/services/permissions';
 import type { Language } from '@/types';
 import { LANGUAGE_NAMES } from '@/types';
 
 export const QuickTranslate: React.FC = () => {
     const { t } = useTranslation();
-    const { defaultLanguage, openaiApiKey, provider, customApiKey, customApiUrl, modelName } =
-        useSettingsStore();
+    const { defaultLanguage } = useSettingsStore();
 
     const [sourceText, setSourceText] = useState('');
     const [translatedText, setTranslatedText] = useState('');
@@ -28,21 +28,17 @@ export const QuickTranslate: React.FC = () => {
             return;
         }
 
-        if (provider === 'custom' && !customApiKey) {
+        const activeConfig = resolveActiveProviderConfig(useSettingsStore.getState());
+        if (activeConfig.isCustom && (!activeConfig.baseUrl || !activeConfig.apiKey)) {
             setError(t('editor.api_key_missing_custom'));
             return;
         }
-        if (provider !== 'custom' && !openaiApiKey) {
+        if (!activeConfig.isCustom && !activeConfig.apiKey) {
             setError(t('editor.api_key_missing_openai'));
             return;
         }
 
-        const apiKey = provider === 'custom' ? customApiKey : openaiApiKey;
-        const baseURL = provider === 'custom' ? customApiUrl : undefined;
-        const permissionBaseUrl =
-            provider === 'custom' ? customApiUrl || '' : DEFAULT_OPENAI_BASE_URL;
-
-        const permissionResult = await ensureHostPermission(permissionBaseUrl);
+        const permissionResult = await ensureHostPermission(activeConfig.baseUrl);
         if (!permissionResult.granted) {
             if (permissionResult.reason === 'invalid_url') {
                 setError(t('editor.permission.invalid_url'));
@@ -54,10 +50,6 @@ export const QuickTranslate: React.FC = () => {
             return;
         }
 
-        if (!apiKey) {
-            return;
-        }
-
         setIsTranslating(true);
         setError(null);
 
@@ -65,9 +57,10 @@ export const QuickTranslate: React.FC = () => {
             const result = await aiService.translate(
                 sourceText,
                 targetLanguage,
-                apiKey,
-                modelName,
-                baseURL,
+                activeConfig.apiKey,
+                activeConfig.modelName,
+                activeConfig.baseUrl,
+                activeConfig.apiFormat,
             );
             setTranslatedText(result.content);
         } catch (err) {

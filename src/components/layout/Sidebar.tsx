@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-    CalendarClock,
     CheckCircle,
     FileText,
     FileClock,
@@ -38,25 +37,17 @@ export const Sidebar: React.FC = () => {
     const libraryItems: { id: LibraryFilter; label: string; icon: React.ReactNode }[] = [
         { id: 'all', label: t('dashboard.title.all'), icon: <FileText size={18} /> },
         { id: 'drafts', label: t('dashboard.title.drafts'), icon: <FileClock size={18} /> },
-        {
-            id: 'scheduled',
-            label: t('dashboard.title.scheduled'),
-            icon: <CalendarClock size={18} />,
-        },
         { id: 'posted', label: t('dashboard.title.posted'), icon: <CheckCircle size={18} /> },
     ];
 
     // Count posts by status
     const draftCount = posts.filter((p) => p.status === 'draft').length;
-    const scheduledCount = posts.filter((p) => p.status === 'scheduled').length;
     const postedCount = posts.filter((p) => p.status === 'posted').length;
 
     const getCount = (id: LibraryFilter) => {
         switch (id) {
             case 'drafts':
                 return draftCount;
-            case 'scheduled':
-                return scheduledCount;
             case 'posted':
                 return postedCount;
             default:
@@ -241,9 +232,6 @@ export const Sidebar: React.FC = () => {
                                             </span>
                                         )}
                                     </button>
-                                    <span className="absolute left-full ml-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-xs bg-bg-tertiary text-text-primary px-2 py-1 rounded border border-border-primary shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity sm:hidden">
-                                        {folder.name}
-                                    </span>
 
                                     {/* Folder Actions */}
                                     <div className="absolute right-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity hidden sm:flex">

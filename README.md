@@ -9,7 +9,8 @@ One codebase builds extensions for Chrome, Firefox, and Safari.
 
 - Generate, polish, and translate social content (multi-language)
 - Main app UI (Dashboard / Editor / Settings)
-- Customizable polish prompt templates (`Prompts`) and configurable OpenAI / custom model selection (built-in presets such as `gpt-5.4-mini` or any custom model ID)
+- Customizable polish prompt templates (`Prompts`) and configurable model selection across 9 built-in AI providers (OpenAI, Anthropic Claude, Google Gemini, xAI Grok, DeepSeek, Qwen, Kimi, Zhipu GLM, OpenRouter)
+- Multi-channel Custom Providers supporting both OpenAI-compatible (`/v1/chat/completions`) and Anthropic-compatible (`/v1/messages`) formats
 - Quick Translate tool for one-off reply translation without creating posts
 - In-page X/Twitter Follower Filter for `/followers`, `/verified_followers`, and `/following` lists (mutuals, non-followers, verified/unverified)
 - Bilingual UI (`English` / `简体中文`) and theme switching (`Light` / `Dark` / `System`)

@@ -46,24 +46,6 @@ export function openTweetIntent(options: TweetIntentOptions): void {
     window.open(intentUrl, '_blank', 'noopener,noreferrer');
 }
 
-/**
- * Extract hashtags from tweet content
- */
-export function extractHashtags(content: string): string[] {
-    const hashtagRegex = /#[\w\u4e00-\u9fa5]+/g;
-    const matches = content.match(hashtagRegex);
-    return matches || [];
-}
-
-/**
- * Remove hashtags from content (if you want to pass them separately)
- */
-export function removeHashtags(content: string): string {
-    return content.replace(/#[\w\u4e00-\u9fa5]+/g, '').trim();
-}
-
 export const twitterService = {
     openTweetIntent,
-    extractHashtags,
-    removeHashtags,
 };

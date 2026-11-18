@@ -57,11 +57,8 @@ export const usePostsStore = create<PostsState>((set, get) => ({
             folderId,
             sourceContent,
             status: 'draft',
-            tags: [],
-            campaignId: null,
             createdAt: Date.now(),
             updatedAt: Date.now(),
-            publishedAt: null,
         };
 
         await storage.addPost(post);
@@ -157,7 +154,6 @@ export const usePostsStore = create<PostsState>((set, get) => ({
         const statusMap: Record<LibraryFilter, PostStatus | null> = {
             all: null,
             drafts: 'draft',
-            scheduled: 'scheduled',
             posted: 'posted',
         };
 

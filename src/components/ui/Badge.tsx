@@ -2,7 +2,7 @@ import React from 'react';
 
 interface BadgeProps {
     children: React.ReactNode;
-    variant?: 'default' | 'draft' | 'scheduled' | 'posted' | 'language' | 'tag';
+    variant?: 'default' | 'draft' | 'posted' | 'language' | 'tag';
     color?: string;
     className?: string;
 }
@@ -18,7 +18,6 @@ export const Badge: React.FC<BadgeProps> = ({
     const variantStyles = {
         default: 'bg-bg-tertiary text-text-secondary',
         draft: 'bg-status-draft/20 text-status-draft',
-        scheduled: 'bg-status-scheduled/20 text-status-scheduled',
         posted: 'bg-status-posted/20 text-status-posted',
         language: 'bg-accent/20 text-accent',
         tag: 'bg-bg-tertiary text-text-secondary',

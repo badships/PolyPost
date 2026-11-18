@@ -20,7 +20,7 @@ export const Button: React.FC<ButtonProps> = ({
     ...props
 }) => {
     const baseStyles =
-        'inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed';
+        'inline-flex items-center justify-center whitespace-nowrap shrink-0 font-medium rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed';
 
     const variantStyles = {
         primary: 'bg-accent hover:bg-accent-hover text-white',

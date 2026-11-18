@@ -34,7 +34,6 @@ const PostListItem: React.FC<{
 
     const statusLabels = {
         draft: t('post.status.draft'),
-        scheduled: t('post.status.scheduled'),
         posted: t('post.status.posted'),
     };
 
@@ -73,15 +72,7 @@ const PostListItem: React.FC<{
 
                 {/* Status */}
                 <div className="w-20">
-                    <Badge
-                        variant={
-                            post.status === 'draft'
-                                ? 'draft'
-                                : post.status === 'posted'
-                                  ? 'posted'
-                                  : 'scheduled'
-                        }
-                    >
+                    <Badge variant={post.status === 'posted' ? 'posted' : 'draft'}>
                         {statusLabels[post.status]}
                     </Badge>
                 </div>

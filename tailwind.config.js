@@ -25,16 +25,7 @@ export default {
 
                 // Status colors
                 'status-draft': 'rgb(var(--status-draft) / <alpha-value>)',
-                'status-scheduled': 'rgb(var(--status-scheduled) / <alpha-value>)',
                 'status-posted': 'rgb(var(--status-posted) / <alpha-value>)',
-
-                // Tag colors
-                'tag-thread': 'rgb(var(--tag-thread) / <alpha-value>)',
-                'tag-polished': 'rgb(var(--tag-polished) / <alpha-value>)',
-                'tag-viral': 'rgb(var(--tag-viral) / <alpha-value>)',
-                'tag-technical': 'rgb(var(--tag-technical) / <alpha-value>)',
-                'tag-emoji': 'rgb(var(--tag-emoji) / <alpha-value>)',
-                'tag-short': 'rgb(var(--tag-short) / <alpha-value>)',
             },
             fontFamily: {
                 sans: ['Inter', 'system-ui', 'sans-serif'],

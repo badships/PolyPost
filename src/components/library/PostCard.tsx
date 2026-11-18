@@ -27,13 +27,11 @@ export const PostCard: React.FC<PostCardProps> = ({ post, variants, onClick }) =
 
     const statusVariant = {
         draft: 'draft' as const,
-        scheduled: 'scheduled' as const,
         posted: 'posted' as const,
     };
 
     const statusLabels = {
         draft: t('post.status.draft'),
-        scheduled: t('post.status.scheduled'),
         posted: t('post.status.posted'),
     };
 

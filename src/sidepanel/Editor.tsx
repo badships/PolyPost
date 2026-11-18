@@ -3,7 +3,8 @@ import { ArrowLeft, Save, Send } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { SourceEditor, VariantsPanel, PolishModal, TranslateModal } from '@/components/editor';
 import { usePostsStore, useSettingsStore, useUIStore } from '@/store';
-import { aiService, DEFAULT_OPENAI_BASE_URL } from '@/services/ai';
+import { aiService } from '@/services/ai';
+import { resolveActiveProviderConfig } from '@/services/settingsDefaults';
 import { ensureHostPermission } from '@/services/permissions';
 import { twitterService } from '@/services/twitter';
 import type { PolishTemplate, Language } from '@/types';
@@ -19,15 +20,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
     const { currentPostId, getPostById, updatePost, addVariant, selectVariant, deleteVariant } =
         usePostsStore();
     const variants = usePostsStore((s) => s.getVariantsByPostId(currentPostId || ''));
-    const {
-        openaiApiKey,
-        provider,
-        customApiKey,
-        customApiUrl,
-        modelName,
-        prompts,
-        defaultLanguage,
-    } = useSettingsStore();
+    const { prompts, defaultLanguage } = useSettingsStore();
     const {
         isPolishModalOpen,
         isTranslateModalOpen,
@@ -146,6 +139,32 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
         }
     };
 
+    const resolveAndAuthorizeProvider = async () => {
+        const activeConfig = resolveActiveProviderConfig(useSettingsStore.getState());
+        if (activeConfig.isCustom && (!activeConfig.baseUrl || !activeConfig.apiKey)) {
+            setError(t('editor.api_key_missing_custom'));
+            return null;
+        }
+        if (!activeConfig.isCustom && !activeConfig.apiKey) {
+            setError(t('editor.api_key_missing_openai'));
+            return null;
+        }
+
+        const permissionResult = await ensureHostPermission(activeConfig.baseUrl);
+        if (!permissionResult.granted) {
+            if (permissionResult.reason === 'invalid_url') {
+                setError(t('editor.permission.invalid_url'));
+            } else if (permissionResult.reason === 'not_allowed') {
+                setError(t('editor.permission.not_allowed', permissionResult.origin || ''));
+            } else {
+                setError(t('editor.permission.denied', permissionResult.origin || ''));
+            }
+            return null;
+        }
+
+        return activeConfig;
+    };
+
     const handlePolish = async (templateId: PolishTemplate) => {
         if (!content.trim()) {
             setError(t('editor.polish_error'));
@@ -160,37 +179,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
             return;
         }
 
-        // Logic for checking API key
-        if (provider === 'custom' && !customApiKey) {
-            setError(t('editor.api_key_missing_custom'));
-            closePolishModal();
-            return;
-        }
-        if (provider !== 'custom' && !openaiApiKey) {
-            setError(t('editor.api_key_missing_openai'));
-            closePolishModal();
-            return;
-        }
-
-        const apiKey = provider === 'custom' ? customApiKey : openaiApiKey;
-        const baseURL = provider === 'custom' ? customApiUrl : undefined;
-        const permissionBaseUrl =
-            provider === 'custom' ? customApiUrl || '' : DEFAULT_OPENAI_BASE_URL;
-
-        if (!apiKey) {
-            // Should not happen due to checks above
-            return;
-        }
-
-        const permissionResult = await ensureHostPermission(permissionBaseUrl);
-        if (!permissionResult.granted) {
-            if (permissionResult.reason === 'invalid_url') {
-                setError(t('editor.permission.invalid_url'));
-            } else if (permissionResult.reason === 'not_allowed') {
-                setError(t('editor.permission.not_allowed', permissionResult.origin || ''));
-            } else {
-                setError(t('editor.permission.denied', permissionResult.origin || ''));
-            }
+        const activeConfig = await resolveAndAuthorizeProvider();
+        if (!activeConfig) {
             closePolishModal();
             return;
         }
@@ -202,9 +192,10 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
             const result = await aiService.polish(
                 content,
                 selectedPrompt.content,
-                apiKey,
-                modelName,
-                baseURL,
+                activeConfig.apiKey,
+                activeConfig.modelName,
+                activeConfig.baseUrl,
+                activeConfig.apiFormat,
             );
 
             const newVariant = await addVariant({
@@ -213,7 +204,6 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
                 language: null,
                 promptTemplate: templateId,
                 content: result.content,
-                aiConfidence: result.confidence,
                 description: selectedPrompt.description || result.description,
                 isSelected: false,
             });
@@ -245,32 +235,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
             return;
         }
 
-        // Logic for checking API key
-        if (provider === 'custom' && !customApiKey) {
-            setError(t('editor.api_key_missing_custom'));
-            closeTranslateModal();
-            return;
-        }
-        if (provider !== 'custom' && !openaiApiKey) {
-            setError(t('editor.api_key_missing_openai'));
-            closeTranslateModal();
-            return;
-        }
-
-        const apiKey = provider === 'custom' ? customApiKey : openaiApiKey;
-        const baseURL = provider === 'custom' ? customApiUrl : undefined;
-        const permissionBaseUrl =
-            provider === 'custom' ? customApiUrl || '' : DEFAULT_OPENAI_BASE_URL;
-
-        const permissionResult = await ensureHostPermission(permissionBaseUrl);
-        if (!permissionResult.granted) {
-            if (permissionResult.reason === 'invalid_url') {
-                setError(t('editor.permission.invalid_url'));
-            } else if (permissionResult.reason === 'not_allowed') {
-                setError(t('editor.permission.not_allowed', permissionResult.origin || ''));
-            } else {
-                setError(t('editor.permission.denied', permissionResult.origin || ''));
-            }
+        const activeConfig = await resolveAndAuthorizeProvider();
+        if (!activeConfig) {
             closeTranslateModal();
             return;
         }
@@ -290,9 +256,10 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
                 const result = await aiService.translate(
                     sourceContent,
                     targetLanguage,
-                    apiKey!,
-                    modelName,
-                    baseURL,
+                    activeConfig.apiKey,
+                    activeConfig.modelName,
+                    activeConfig.baseUrl,
+                    activeConfig.apiFormat,
                 );
 
                 const newVariant = await addVariant({
@@ -301,7 +268,6 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
                     language: targetLanguage,
                     promptTemplate: null,
                     content: result.content,
-                    aiConfidence: result.confidence,
                     description: result.description,
                     isSelected: false,
                 });

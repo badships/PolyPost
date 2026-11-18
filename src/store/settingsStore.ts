@@ -1,8 +1,12 @@
 import { create } from 'zustand';
-import type { Settings, Language, PolishPrompt } from '@/types';
+import type { Settings, Language, PolishPrompt, ProviderId } from '@/types';
 import { storage } from '@/services/storage';
 import { buildDefaultPrompts, DEFAULT_SETTINGS } from '@/services/settingsDefaults';
-import { normalizeModelName } from '@/services/models';
+import {
+    isBuiltInProviderId,
+    normalizeModelName,
+    normalizeModelNameForProvider,
+} from '@/services/models';
 import { getWebExt } from '@/services/webext';
 
 interface SettingsState extends Settings {
@@ -12,7 +16,7 @@ interface SettingsState extends Settings {
     loadSettings: () => Promise<void>;
     updateSettings: (updates: Partial<Settings>) => Promise<void>;
     setOpenaiApiKey: (key: string) => Promise<void>;
-    setProvider: (provider: 'openai' | 'custom') => Promise<void>;
+    setProvider: (provider: ProviderId) => Promise<void>;
     setCustomApiUrl: (url: string) => Promise<void>;
     setCustomApiKey: (key: string) => Promise<void>;
     setModelName: (modelName: string) => Promise<void>;
@@ -34,6 +38,9 @@ const SETTING_KEYS: (keyof Settings)[] = [
     'customApiUrl',
     'customApiKey',
     'modelName',
+    'providerConfigs',
+    'customProviders',
+    'activeCustomProviderId',
     'defaultLanguage',
     'defaultPolishTemplate',
     'theme',
@@ -145,6 +152,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         customApiUrl: '',
         customApiKey: '',
         modelName: DEFAULT_SETTINGS.modelName,
+        providerConfigs: DEFAULT_SETTINGS.providerConfigs,
+        customProviders: DEFAULT_SETTINGS.customProviders,
+        activeCustomProviderId: DEFAULT_SETTINGS.activeCustomProviderId,
         defaultLanguage: 'en',
         defaultPolishTemplate: 'professional',
         theme: 'dark',
@@ -201,11 +211,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         },
 
         updateSettings: async (updates: Partial<Settings>) => {
+            const targetProvider = updates.provider ?? get().provider;
+            const normalizedModel =
+                updates.modelName !== undefined
+                    ? isBuiltInProviderId(targetProvider)
+                        ? normalizeModelNameForProvider(targetProvider, updates.modelName)
+                        : normalizeModelName(updates.modelName)
+                    : undefined;
             const normalizedUpdates: Partial<Settings> = {
                 ...updates,
-                ...(updates.modelName !== undefined
-                    ? { modelName: normalizeModelName(updates.modelName) }
-                    : {}),
+                ...(normalizedModel !== undefined ? { modelName: normalizedModel } : {}),
             };
 
             const effectiveKeys = Object.keys(normalizedUpdates) as (keyof Settings)[];
@@ -219,33 +234,97 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         },
 
         setOpenaiApiKey: async (key: string) => {
-            await applySettingsMutation(['openaiApiKey'], { openaiApiKey: key }, () =>
-                storage.updateSettings({ openaiApiKey: key }),
+            const { providerConfigs } = get();
+            const nextProviderConfigs = {
+                ...providerConfigs,
+                openai: { ...providerConfigs.openai, apiKey: key },
+            };
+            await applySettingsMutation(
+                ['openaiApiKey', 'providerConfigs'],
+                { openaiApiKey: key, providerConfigs: nextProviderConfigs },
+                () =>
+                    storage.updateSettings({
+                        openaiApiKey: key,
+                        providerConfigs: nextProviderConfigs,
+                    }),
             );
         },
 
-        setProvider: async (provider: 'openai' | 'custom') => {
+        setProvider: async (provider: ProviderId) => {
             await applySettingsMutation(['provider'], { provider }, () =>
                 storage.updateSettings({ provider }),
             );
         },
 
         setCustomApiUrl: async (url: string) => {
-            await applySettingsMutation(['customApiUrl'], { customApiUrl: url }, () =>
-                storage.updateSettings({ customApiUrl: url }),
+            const { customProviders, activeCustomProviderId } = get();
+            const nextCustomProviders = customProviders.map((channel) =>
+                channel.id === activeCustomProviderId ? { ...channel, baseUrl: url } : channel,
+            );
+            await applySettingsMutation(
+                ['customApiUrl', 'customProviders'],
+                { customApiUrl: url, customProviders: nextCustomProviders },
+                () =>
+                    storage.updateSettings({
+                        customApiUrl: url,
+                        customProviders: nextCustomProviders,
+                    }),
             );
         },
 
         setCustomApiKey: async (key: string) => {
-            await applySettingsMutation(['customApiKey'], { customApiKey: key }, () =>
-                storage.updateSettings({ customApiKey: key }),
+            const { customProviders, activeCustomProviderId } = get();
+            const nextCustomProviders = customProviders.map((channel) =>
+                channel.id === activeCustomProviderId ? { ...channel, apiKey: key } : channel,
+            );
+            await applySettingsMutation(
+                ['customApiKey', 'customProviders'],
+                { customApiKey: key, customProviders: nextCustomProviders },
+                () =>
+                    storage.updateSettings({
+                        customApiKey: key,
+                        customProviders: nextCustomProviders,
+                    }),
             );
         },
 
         setModelName: async (modelName: string) => {
+            const { provider, providerConfigs, customProviders, activeCustomProviderId } = get();
+            if (isBuiltInProviderId(provider)) {
+                const normalizedModelName = normalizeModelNameForProvider(provider, modelName);
+                const nextProviderConfigs = {
+                    ...providerConfigs,
+                    [provider]: {
+                        ...providerConfigs[provider],
+                        modelName: normalizedModelName,
+                    },
+                };
+                await applySettingsMutation(
+                    ['modelName', 'providerConfigs'],
+                    { modelName: normalizedModelName, providerConfigs: nextProviderConfigs },
+                    () =>
+                        storage.updateSettings({
+                            modelName: normalizedModelName,
+                            providerConfigs: nextProviderConfigs,
+                        }),
+                );
+                return;
+            }
+
             const normalizedModelName = normalizeModelName(modelName);
-            await applySettingsMutation(['modelName'], { modelName: normalizedModelName }, () =>
-                storage.updateSettings({ modelName: normalizedModelName }),
+            const nextCustomProviders = customProviders.map((channel) =>
+                channel.id === activeCustomProviderId
+                    ? { ...channel, modelName: normalizedModelName }
+                    : channel,
+            );
+            await applySettingsMutation(
+                ['modelName', 'customProviders'],
+                { modelName: normalizedModelName, customProviders: nextCustomProviders },
+                () =>
+                    storage.updateSettings({
+                        modelName: normalizedModelName,
+                        customProviders: nextCustomProviders,
+                    }),
             );
         },
 

@@ -25,6 +25,9 @@ const SETTING_KEYS: (keyof Settings)[] = [
     'customApiUrl',
     'customApiKey',
     'modelName',
+    'providerConfigs',
+    'customProviders',
+    'activeCustomProviderId',
     'defaultLanguage',
     'defaultPolishTemplate',
     'theme',
@@ -281,14 +284,20 @@ const writeLocal = (key: string, value: unknown): void => {
     localStorage.setItem(key, JSON.stringify(value));
 };
 
+const normalizeStoredPost = (post: Post): Post => ({
+    ...post,
+    status: post.status === 'posted' ? 'posted' : 'draft',
+});
+
 const _getPosts = async (): Promise<Post[]> => {
     const webext = getWebExt();
     if (webext?.storage?.local) {
         const result = await webext.storage.local.get(STORAGE_KEYS.POSTS);
-        return result[STORAGE_KEYS.POSTS] || [];
+        const posts = (result[STORAGE_KEYS.POSTS] || []) as Post[];
+        return posts.map(normalizeStoredPost);
     }
 
-    return readLocal<Post[]>(STORAGE_KEYS.POSTS, []);
+    return readLocal<Post[]>(STORAGE_KEYS.POSTS, []).map(normalizeStoredPost);
 };
 
 const _savePosts = async (posts: Post[]): Promise<void> => {

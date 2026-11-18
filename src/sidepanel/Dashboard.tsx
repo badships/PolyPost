@@ -43,9 +43,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 case 'drafts':
                     result = result.filter((p) => p.status === 'draft');
                     break;
-                case 'scheduled':
-                    result = result.filter((p) => p.status === 'scheduled');
-                    break;
                 case 'posted':
                     result = result.filter((p) => p.status === 'posted');
                     break;
@@ -81,8 +78,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
         switch (libraryFilter) {
             case 'drafts':
                 return t('dashboard.title.drafts');
-            case 'scheduled':
-                return t('dashboard.title.scheduled');
             case 'posted':
                 return t('dashboard.title.posted');
             default:

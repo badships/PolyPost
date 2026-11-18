@@ -3,7 +3,7 @@
 // ============================================
 
 // Post status enum
-export type PostStatus = 'draft' | 'scheduled' | 'posted';
+export type PostStatus = 'draft' | 'posted';
 
 // Variant type enum
 export type VariantType = 'polish' | 'translation';
@@ -73,11 +73,8 @@ export interface Post {
     folderId: string | null;
     sourceContent: string;
     status: PostStatus;
-    tags: string[];
-    campaignId: string | null;
     createdAt: number;
     updatedAt: number;
-    publishedAt: number | null;
 }
 
 // ============================================
@@ -90,7 +87,6 @@ export interface Variant {
     language: Language | null; // Only for translations
     promptTemplate: PolishTemplate | null; // Only for polish
     content: string;
-    aiConfidence: number; // 0-100
     description: string;
     isSelected: boolean;
     createdAt: number;
@@ -113,12 +109,44 @@ export interface PolishPrompt {
 // ============================================
 // Settings
 // ============================================
+export type BuiltInProviderId =
+    | 'openai'
+    | 'anthropic'
+    | 'gemini'
+    | 'xai'
+    | 'deepseek'
+    | 'qwen'
+    | 'kimi'
+    | 'zhipu'
+    | 'openrouter';
+
+export type ProviderId = BuiltInProviderId | 'custom';
+
+export type ApiFormat = 'openai' | 'anthropic';
+
+export interface BuiltInProviderSetting {
+    apiKey: string;
+    modelName: string;
+}
+
+export interface CustomProviderConfig {
+    id: string;
+    name: string;
+    apiFormat: ApiFormat;
+    baseUrl: string;
+    apiKey: string;
+    modelName: string;
+}
+
 export interface Settings {
     openaiApiKey: string;
-    provider: 'openai' | 'custom';
+    provider: ProviderId;
     customApiUrl?: string;
     customApiKey?: string;
     modelName: string;
+    providerConfigs: Record<BuiltInProviderId, BuiltInProviderSetting>;
+    customProviders: CustomProviderConfig[];
+    activeCustomProviderId: string;
     defaultLanguage: Language;
     defaultPolishTemplate: string; // Changed from PolishTemplate to string to support custom IDs
     theme: 'dark' | 'light' | 'system';
@@ -130,7 +158,7 @@ export interface Settings {
 // UI State
 // ============================================
 export type ViewMode = 'grid' | 'list';
-export type LibraryFilter = 'all' | 'drafts' | 'scheduled' | 'posted';
+export type LibraryFilter = 'all' | 'drafts' | 'posted';
 export type DashboardView = 'posts' | 'prompts' | 'translate' | 'followers';
 
 export interface UIState {
@@ -141,18 +169,6 @@ export interface UIState {
     currentPage: 'dashboard' | 'editor' | 'settings';
     dashboardView: DashboardView;
 }
-
-// ============================================
-// Tags
-// ============================================
-export const TAG_COLORS: Record<string, string> = {
-    Thread: 'bg-tag-thread',
-    Polished: 'bg-tag-polished',
-    Viral: 'bg-tag-viral',
-    Technical: 'bg-tag-technical',
-    Emoji: 'bg-tag-emoji',
-    Short: 'bg-tag-short',
-};
 
 // Default folder colors
 export const FOLDER_COLORS = [

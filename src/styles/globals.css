@@ -34,24 +34,8 @@
         /* Status Colors */
         --status-draft: 140 149 159;
         /* #8c959f */
-        --status-scheduled: 245 158 11;
-        /* #F59E0B */
         --status-posted: 34 197 94;
         /* #22C55E */
-
-        /* Tag Colors */
-        --tag-thread: 139 92 246;
-        /* #8B5CF6 */
-        --tag-polished: 16 185 129;
-        /* #10B981 */
-        --tag-viral: 239 68 68;
-        /* #EF4444 */
-        --tag-technical: 59 130 246;
-        /* #3B82F6 */
-        --tag-emoji: 245 158 11;
-        /* #F59E0B */
-        --tag-short: 236 72 153;
-        /* #EC4899 */
     }
 
     /* Dark Theme Palette (GitHub Dark inspired) - using :root.dark for higher specificity */
@@ -85,24 +69,8 @@
         /* Status Colors */
         --status-draft: 139 148 158;
         /* #8B949E */
-        --status-scheduled: 245 158 11;
-        /* #F59E0B */
         --status-posted: 34 197 94;
         /* #22C55E */
-
-        /* Tag Colors */
-        --tag-thread: 139 92 246;
-        /* #8B5CF6 */
-        --tag-polished: 16 185 129;
-        /* #10B981 */
-        --tag-viral: 239 68 68;
-        /* #EF4444 */
-        --tag-technical: 59 130 246;
-        /* #3B82F6 */
-        --tag-emoji: 245 158 11;
-        /* #F59E0B */
-        --tag-short: 236 72 153;
-        /* #EC4899 */
     }
 }
 

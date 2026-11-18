@@ -12,7 +12,6 @@ interface SourceEditorProps {
     onTranslate: () => void;
     isPolishing?: boolean;
     isTranslating?: boolean;
-    campaignName?: string;
 }
 
 export const SourceEditor: React.FC<SourceEditorProps> = ({
@@ -23,7 +22,6 @@ export const SourceEditor: React.FC<SourceEditorProps> = ({
     onTranslate,
     isPolishing = false,
     isTranslating = false,
-    campaignName,
 }) => {
     const { t } = useTranslation();
     const charCount = countCharacters(content);
@@ -119,11 +117,8 @@ export const SourceEditor: React.FC<SourceEditorProps> = ({
                     {/* Media buttons - REMOVED as Twitter Web Intent doesn't support media */}
                     <div className="flex items-center gap-2">{/* Buttons removed */}</div>
 
-                    {/* Campaign and char count */}
+                    {/* Char count */}
                     <div className="flex items-center gap-4">
-                        {campaignName && (
-                            <span className="text-sm text-accent">{campaignName}</span>
-                        )}
                         <div className="flex items-center gap-2">
                             <div
                                 className={`h-1.5 w-24 rounded-full overflow-hidden ${
