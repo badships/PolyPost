@@ -28,20 +28,32 @@ interface SettingsState extends Settings {
     resetPrompts: () => Promise<void>;
 }
 
+const SETTING_KEYS: (keyof Settings)[] = [
+    'openaiApiKey',
+    'provider',
+    'customApiUrl',
+    'customApiKey',
+    'modelName',
+    'defaultLanguage',
+    'defaultPolishTemplate',
+    'theme',
+    'uiLanguage',
+    'prompts',
+];
+
 const inFlightCounts = new Map<keyof Settings, number>();
 const committedMutations = new Map<keyof Settings, { version: number; value: unknown }>();
-const userEditedFields = new Set<keyof Settings>();
+const fieldMutationSeq = new Map<keyof Settings, number>();
+const committedValues = new Map<keyof Settings, unknown>();
 let mutationVersion = 0;
 let loadSeq = 0;
 
-const areSettingValuesEqual = (a: unknown, b: unknown): boolean => {
-    if (Object.is(a, b)) {
-        return true;
-    }
-    if (typeof a === 'object' && a !== null && typeof b === 'object' && b !== null) {
-        return JSON.stringify(a) === JSON.stringify(b);
-    }
-    return false;
+const assignSettingField = (
+    target: Partial<Settings>,
+    key: keyof Settings,
+    value: unknown,
+): void => {
+    (target as Record<keyof Settings, unknown>)[key] = value;
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => {
@@ -51,11 +63,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         storageOp: () => Promise<Settings>,
     ): Promise<void> => {
         const currentState = get();
-        const previousValues: Partial<Settings> = {};
+        const startLoadSeq = loadSeq;
+        const myFieldSeq = new Map<keyof Settings, number>();
 
         for (const field of fields) {
-            (previousValues as any)[field] = currentState[field];
-            inFlightCounts.set(field, (inFlightCounts.get(field) ?? 0) + 1);
+            const prevCount = inFlightCounts.get(field) ?? 0;
+            if (prevCount === 0) {
+                committedValues.set(field, currentState[field]);
+            }
+            inFlightCounts.set(field, prevCount + 1);
+            const nextSeq = (fieldMutationSeq.get(field) ?? 0) + 1;
+            fieldMutationSeq.set(field, nextSeq);
+            myFieldSeq.set(field, nextSeq);
         }
 
         if (Object.keys(optimisticPatch).length > 0) {
@@ -66,27 +85,42 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
             const saved = await storageOp();
             const version = ++mutationVersion;
             const latestState = get();
-            const nextState: Partial<Settings> = { ...saved };
+            const nextState: Partial<Settings> = {};
+            const fieldSet = new Set<keyof Settings>(fields);
 
             for (const field of fields) {
-                committedMutations.set(field, { version, value: saved[field] });
-                userEditedFields.add(field);
-            }
-
-            for (const [key, count] of inFlightCounts.entries()) {
-                const otherCount = fields.includes(key) ? count - 1 : count;
-                if (otherCount > 0) {
-                    (nextState as any)[key] = latestState[key];
+                committedValues.set(field, saved[field]);
+                const otherCount = Math.max(0, (inFlightCounts.get(field) ?? 1) - 1);
+                const isLatestOnField = fieldMutationSeq.get(field) === myFieldSeq.get(field);
+                if (isLatestOnField || otherCount === 0) {
+                    committedMutations.set(field, { version, value: saved[field] });
+                    assignSettingField(nextState, field, saved[field]);
                 }
             }
 
-            set(nextState);
+            if (loadSeq === startLoadSeq) {
+                for (const key of SETTING_KEYS) {
+                    if (fieldSet.has(key)) {
+                        continue;
+                    }
+                    if ((inFlightCounts.get(key) ?? 0) === 0) {
+                        committedValues.set(key, saved[key]);
+                        assignSettingField(nextState, key, saved[key]);
+                    } else {
+                        assignSettingField(nextState, key, latestState[key]);
+                    }
+                }
+            }
+
+            if (Object.keys(nextState).length > 0) {
+                set(nextState);
+            }
         } catch (error) {
             const rollback: Partial<Settings> = {};
             for (const field of fields) {
                 const remaining = (inFlightCounts.get(field) ?? 1) - 1;
                 if (remaining <= 0) {
-                    (rollback as any)[field] = previousValues[field];
+                    assignSettingField(rollback, field, committedValues.get(field));
                 }
             }
             if (Object.keys(rollback).length > 0) {
@@ -135,15 +169,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
                 for (const [key, entry] of committedMutations.entries()) {
                     if (entry.version > startVersion) {
-                        (hydrated as any)[key] = entry.value;
-                    } else if (!areSettingValuesEqual(hydrated[key], currentState[key])) {
-                        userEditedFields.delete(key);
+                        assignSettingField(hydrated, key, entry.value);
                     }
+                }
+
+                for (const key of SETTING_KEYS) {
+                    committedValues.set(key, hydrated[key]);
                 }
 
                 for (const [key, count] of inFlightCounts.entries()) {
                     if (count > 0) {
-                        (hydrated as any)[key] = currentState[key];
+                        assignSettingField(hydrated, key, currentState[key]);
                     }
                 }
 
@@ -165,7 +201,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         },
 
         updateSettings: async (updates: Partial<Settings>) => {
-            const currentState = get();
             const normalizedUpdates: Partial<Settings> = {
                 ...updates,
                 ...(updates.modelName !== undefined
@@ -173,34 +208,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                     : {}),
             };
 
-            const keys = Object.keys(normalizedUpdates) as (keyof Settings)[];
-            let effectiveUpdates: Partial<Settings> = normalizedUpdates;
-
-            if (keys.length > 1) {
-                const hasDifference = keys.some(
-                    (key) => !areSettingValuesEqual(normalizedUpdates[key], currentState[key]),
-                );
-                if (hasDifference) {
-                    const filtered: Partial<Settings> = {};
-                    for (const key of keys) {
-                        if (
-                            !areSettingValuesEqual(normalizedUpdates[key], currentState[key]) ||
-                            userEditedFields.has(key)
-                        ) {
-                            (filtered as any)[key] = normalizedUpdates[key];
-                        }
-                    }
-                    effectiveUpdates = filtered;
-                }
-            }
-
-            const effectiveKeys = Object.keys(effectiveUpdates) as (keyof Settings)[];
+            const effectiveKeys = Object.keys(normalizedUpdates) as (keyof Settings)[];
             if (effectiveKeys.length === 0) {
                 return;
             }
 
-            await applySettingsMutation(effectiveKeys, effectiveUpdates, () =>
-                storage.updateSettings(effectiveUpdates),
+            await applySettingsMutation(effectiveKeys, normalizedUpdates, () =>
+                storage.updateSettings(normalizedUpdates),
             );
         },
 

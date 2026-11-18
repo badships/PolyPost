@@ -16,6 +16,15 @@ interface SettingsProps {
     onNavigateBack: () => void;
 }
 
+type AiFormField = 'provider' | 'openaiApiKey' | 'customApiUrl' | 'customApiKey' | 'modelName';
+const AI_FORM_FIELDS: AiFormField[] = [
+    'provider',
+    'openaiApiKey',
+    'customApiUrl',
+    'customApiKey',
+    'modelName',
+];
+
 export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
     const {
         openaiApiKey,
@@ -51,11 +60,18 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
     const [isSaving, setIsSaving] = useState(false);
     const [showApiKey, setShowApiKey] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
-    type AiFormField = 'provider' | 'openaiApiKey' | 'customApiUrl' | 'customApiKey' | 'modelName';
     const dirtyFieldsRef = useRef<Set<AiFormField>>(new Set());
+    const fieldEditVersionRef = useRef<Record<AiFormField, number>>({
+        provider: 0,
+        openaiApiKey: 0,
+        customApiUrl: 0,
+        customApiKey: 0,
+        modelName: 0,
+    });
 
     const updateFormField = <K extends AiFormField>(field: K, value: (typeof settings)[K]) => {
         dirtyFieldsRef.current.add(field);
+        fieldEditVersionRef.current[field] += 1;
         setSaveError(null);
         setSettings((current) => ({
             ...current,
@@ -88,53 +104,56 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
         setIsSaving(true);
         setSaveError(null);
         try {
-            const storeState = useSettingsStore.getState();
+            const submittedFields = AI_FORM_FIELDS.filter((field) =>
+                dirtyFieldsRef.current.has(field),
+            );
+            const submittedVersions: Record<AiFormField, number> = {
+                ...fieldEditVersionRef.current,
+            };
             const updates: Partial<SettingsType> = {};
 
-            if (
-                dirtyFieldsRef.current.has('provider') ||
-                settings.provider !== (storeState.provider || 'openai')
-            ) {
-                updates.provider = settings.provider;
-            }
-            if (
-                dirtyFieldsRef.current.has('openaiApiKey') ||
-                settings.openaiApiKey !== (storeState.openaiApiKey || '')
-            ) {
-                updates.openaiApiKey = settings.openaiApiKey;
-            }
-            if (
-                dirtyFieldsRef.current.has('customApiUrl') ||
-                settings.customApiUrl !== (storeState.customApiUrl || '')
-            ) {
-                updates.customApiUrl = settings.customApiUrl;
-            }
-            if (
-                dirtyFieldsRef.current.has('customApiKey') ||
-                settings.customApiKey !== (storeState.customApiKey || '')
-            ) {
-                updates.customApiKey = settings.customApiKey;
-            }
-            if (
-                dirtyFieldsRef.current.has('modelName') ||
-                settings.modelName !== (storeState.modelName || '')
-            ) {
-                updates.modelName = normalizeModelName(settings.modelName);
+            for (const field of submittedFields) {
+                if (field === 'provider') {
+                    updates.provider = settings.provider;
+                } else if (field === 'openaiApiKey') {
+                    updates.openaiApiKey = settings.openaiApiKey;
+                } else if (field === 'customApiUrl') {
+                    updates.customApiUrl = settings.customApiUrl;
+                } else if (field === 'customApiKey') {
+                    updates.customApiKey = settings.customApiKey;
+                } else if (field === 'modelName') {
+                    updates.modelName = normalizeModelName(settings.modelName);
+                }
             }
 
-            if (Object.keys(updates).length > 0) {
+            if (submittedFields.length > 0) {
                 await updateSettings(updates);
             }
-            dirtyFieldsRef.current.clear();
+
+            for (const field of submittedFields) {
+                if (fieldEditVersionRef.current[field] === submittedVersions[field]) {
+                    dirtyFieldsRef.current.delete(field);
+                }
+            }
 
             const nextState = useSettingsStore.getState();
-            setSettings({
-                provider: nextState.provider || 'openai',
-                openaiApiKey: nextState.openaiApiKey || '',
-                customApiUrl: nextState.customApiUrl || '',
-                customApiKey: nextState.customApiKey || '',
-                modelName: nextState.modelName || '',
-            });
+            setSettings((current) => ({
+                provider: dirtyFieldsRef.current.has('provider')
+                    ? current.provider
+                    : nextState.provider || 'openai',
+                openaiApiKey: dirtyFieldsRef.current.has('openaiApiKey')
+                    ? current.openaiApiKey
+                    : nextState.openaiApiKey || '',
+                customApiUrl: dirtyFieldsRef.current.has('customApiUrl')
+                    ? current.customApiUrl
+                    : nextState.customApiUrl || '',
+                customApiKey: dirtyFieldsRef.current.has('customApiKey')
+                    ? current.customApiKey
+                    : nextState.customApiKey || '',
+                modelName: dirtyFieldsRef.current.has('modelName')
+                    ? current.modelName
+                    : nextState.modelName || '',
+            }));
         } catch (error) {
             setSaveError(error instanceof Error ? error.message : 'Failed to save settings');
         } finally {

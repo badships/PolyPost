@@ -197,6 +197,8 @@ export const PromptSettings: React.FC = () => {
     const { t } = useTranslation();
     const [isAdding, setIsAdding] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [formError, setFormError] = useState<string | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
 
     // Form state
     const [formData, setFormData] = useState<Omit<PolishPrompt, 'id'>>({
@@ -209,11 +211,14 @@ export const PromptSettings: React.FC = () => {
     const resetForm = () => {
         setIsAdding(false);
         setEditingId(null);
+        setFormError(null);
         setFormData({ name: '', description: '', template: '', content: '' });
     };
 
     const handleEdit = (prompt: PolishPrompt) => {
         setEditingId(prompt.id);
+        setFormError(null);
+        setActionError(null);
         setFormData({
             name: prompt.name,
             description: prompt.description,
@@ -223,13 +228,28 @@ export const PromptSettings: React.FC = () => {
         setIsAdding(false);
     };
 
+    const handleStartAdd = () => {
+        setFormError(null);
+        setActionError(null);
+        setIsAdding(true);
+    };
+
+    const handleSetDefault = async (id: string) => {
+        setActionError(null);
+        try {
+            await setDefaultPolishTemplate(id);
+        } catch (err) {
+            setActionError(err instanceof Error ? err.message : 'Failed to update default prompt');
+        }
+    };
+
     const handleDelete = async (id: string) => {
         if (confirm(t('settings.prompts.delete_confirm'))) {
+            setActionError(null);
             try {
                 await deletePrompt(id);
             } catch (err) {
-                // Error handled by store usually, or alert
-                console.error(err);
+                setActionError(err instanceof Error ? err.message : 'Failed to delete prompt');
             }
         }
     };
@@ -239,6 +259,7 @@ export const PromptSettings: React.FC = () => {
 
         if (!formData.name || !formData.content) return;
 
+        setFormError(null);
         try {
             if (isAdding) {
                 const newId = `custom_${Date.now()}`;
@@ -260,7 +281,7 @@ export const PromptSettings: React.FC = () => {
             }
             resetForm();
         } catch (error) {
-            console.error('Failed to save prompt:', error);
+            setFormError(error instanceof Error ? error.message : 'Failed to save prompt');
         }
     };
 
@@ -284,7 +305,7 @@ export const PromptSettings: React.FC = () => {
                 </div>
                 {!isFormOpen && (
                     <button
-                        onClick={() => setIsAdding(true)}
+                        onClick={handleStartAdd}
                         className="flex items-center gap-2 px-3 py-1.5 bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors text-sm"
                     >
                         <Plus size={16} />
@@ -297,6 +318,12 @@ export const PromptSettings: React.FC = () => {
                     </button>
                 )}
             </div>
+
+            {!isFormOpen && actionError && (
+                <p className="text-sm text-red-500 mb-4" role="alert">
+                    {actionError}
+                </p>
+            )}
 
             {/* Edit/Add Form */}
             {isFormOpen ? (
@@ -341,6 +368,11 @@ export const PromptSettings: React.FC = () => {
                                 </div>
                             </div>
                         </div>
+                        {formError && (
+                            <p className="text-sm text-red-500" role="alert">
+                                {formError}
+                            </p>
+                        )}
                         <div className="flex justify-end gap-2 pt-2">
                             <Button variant="ghost" size="sm" onClick={resetForm}>
                                 {t('settings.prompts.form.cancel')}
@@ -366,7 +398,7 @@ export const PromptSettings: React.FC = () => {
                                 key={prompt.id}
                                 prompt={prompt}
                                 isDefault={prompt.id === defaultPolishTemplate}
-                                onSetDefault={setDefaultPolishTemplate}
+                                onSetDefault={handleSetDefault}
                                 onEdit={handleEdit}
                                 onDelete={handleDelete}
                                 canDelete={prompts.length > 1}
@@ -377,7 +409,7 @@ export const PromptSettings: React.FC = () => {
                                 key={prompt.id}
                                 prompt={prompt}
                                 isDefault={prompt.id === defaultPolishTemplate}
-                                onSetDefault={setDefaultPolishTemplate}
+                                onSetDefault={handleSetDefault}
                                 onEdit={handleEdit}
                                 onDelete={handleDelete}
                                 canDelete={prompts.length > 1}
@@ -389,7 +421,7 @@ export const PromptSettings: React.FC = () => {
                     {/* Add Button as Card in Grid View */}
                     {viewMode === 'grid' && (
                         <button
-                            onClick={() => setIsAdding(true)}
+                            onClick={handleStartAdd}
                             className="min-h-[180px] rounded-xl border-2 border-dashed border-border-primary flex flex-col items-center justify-center gap-2 text-text-muted hover:text-text-primary hover:border-accent transition-colors duration-200"
                         >
                             <div className="w-12 h-12 rounded-full bg-bg-tertiary flex items-center justify-center">

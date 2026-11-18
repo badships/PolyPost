@@ -14,7 +14,23 @@ const STORAGE_KEYS = {
     SETTINGS: 'polypost_settings',
 } as const;
 
-type StoredSettingsRecord = Settings & { __updatedAt?: number };
+type StoredSettingsRecord = Partial<Settings> & {
+    __updatedAt?: number;
+    __fieldUpdatedAt?: Partial<Record<keyof Settings, number>>;
+};
+
+const SETTING_KEYS: (keyof Settings)[] = [
+    'openaiApiKey',
+    'provider',
+    'customApiUrl',
+    'customApiKey',
+    'modelName',
+    'defaultLanguage',
+    'defaultPolishTemplate',
+    'theme',
+    'uiLanguage',
+    'prompts',
+];
 
 const STORAGE_LOCK_NAME = 'polypost_storage_lock';
 const STORAGE_RPC_TYPE = 'polypost:storage_rpc';
@@ -145,9 +161,98 @@ const stripSettingsMetadata = (
         return null;
     }
 
-    const { __updatedAt, ...rest } = raw;
+    const { __updatedAt, __fieldUpdatedAt, ...rest } = raw;
     void __updatedAt;
+    void __fieldUpdatedAt;
     return rest;
+};
+
+const getMaxFieldTimestamp = (record?: Partial<StoredSettingsRecord> | null): number => {
+    if (!record?.__fieldUpdatedAt) {
+        return 0;
+    }
+    let maxTs = 0;
+    for (const ts of Object.values(record.__fieldUpdatedAt)) {
+        if (typeof ts === 'number' && ts > maxTs) {
+            maxTs = ts;
+        }
+    }
+    return maxTs;
+};
+
+const getEffectiveFieldTimestamp = (
+    record: Partial<StoredSettingsRecord> | undefined,
+    key: keyof Settings,
+): number => {
+    if (!record || !(key in record)) {
+        return -1;
+    }
+    const recordUpdatedAt = record.__updatedAt ?? 0;
+    const fieldMap = record.__fieldUpdatedAt;
+    if (!fieldMap) {
+        return recordUpdatedAt;
+    }
+    const maxTrackedTs = getMaxFieldTimestamp(record);
+    if (recordUpdatedAt > maxTrackedTs) {
+        return recordUpdatedAt;
+    }
+    const fieldTs = fieldMap[key];
+    return typeof fieldTs === 'number' ? fieldTs : 0;
+};
+
+type SettingsReadMeta = {
+    settings: Settings;
+    syncRaw?: Partial<StoredSettingsRecord>;
+    localRaw?: Partial<StoredSettingsRecord>;
+    syncUpdatedAt: number;
+    localUpdatedAt: number;
+    fieldUpdatedAt: Partial<Record<keyof Settings, number>>;
+};
+
+const mergeSettingsWithFieldTimestamps = (
+    syncRaw?: Partial<StoredSettingsRecord>,
+    localRaw?: Partial<StoredSettingsRecord>,
+): {
+    settings: Settings;
+    fieldUpdatedAt: Partial<Record<keyof Settings, number>>;
+} => {
+    const syncUpdatedAt = syncRaw?.__updatedAt ?? 0;
+    const localUpdatedAt = localRaw?.__updatedAt ?? 0;
+    const mergedRaw: Partial<Settings> = {};
+    const fieldUpdatedAt: Partial<Record<keyof Settings, number>> = {};
+
+    for (const key of SETTING_KEYS) {
+        const localTs = getEffectiveFieldTimestamp(localRaw, key);
+        const syncTs = getEffectiveFieldTimestamp(syncRaw, key);
+
+        if (localTs < 0 && syncTs < 0) {
+            continue;
+        }
+
+        let sourceRecord: Partial<StoredSettingsRecord> | undefined;
+        let chosenTs: number;
+
+        if (localTs > syncTs) {
+            sourceRecord = localRaw;
+            chosenTs = localTs;
+        } else if (syncTs > localTs) {
+            sourceRecord = syncRaw;
+            chosenTs = syncTs;
+        } else {
+            sourceRecord = localUpdatedAt > syncUpdatedAt ? localRaw : syncRaw;
+            chosenTs = Math.max(localTs, syncTs);
+        }
+
+        if (sourceRecord && key in sourceRecord) {
+            (mergedRaw as Record<string, unknown>)[key] = sourceRecord[key];
+            fieldUpdatedAt[key] = chosenTs;
+        }
+    }
+
+    return {
+        settings: normalizeSettings(mergedRaw),
+        fieldUpdatedAt,
+    };
 };
 
 const readLocal = <T>(key: string, fallback: T): T => {
@@ -236,13 +341,25 @@ const _saveFolders = async (folders: Folder[]): Promise<void> => {
     writeLocal(STORAGE_KEYS.FOLDERS, folders);
 };
 
-const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Settings> => {
+const _readSettingsWithMeta = async (options?: { strict?: boolean }): Promise<SettingsReadMeta> => {
     const strict = options?.strict ?? false;
     const webext = getWebExt();
-    let syncRaw: Partial<StoredSettingsRecord> | undefined;
     let localRaw: Partial<StoredSettingsRecord> | undefined;
-    let syncError: unknown;
+    let syncRaw: Partial<StoredSettingsRecord> | undefined;
     let localError: unknown;
+    let syncError: unknown;
+
+    // Read local before sync so a late sync delivery triggered during local.get
+    // is visible to the subsequent sync.get in the same transaction.
+    if (webext?.storage?.local) {
+        try {
+            const localResult = await webext.storage.local.get(STORAGE_KEYS.SETTINGS);
+            localRaw = localResult?.[STORAGE_KEYS.SETTINGS];
+        } catch (error) {
+            localError = error;
+            console.warn('Failed to read settings from storage.local:', error);
+        }
+    }
 
     if (webext?.storage?.sync) {
         try {
@@ -251,16 +368,6 @@ const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Setti
         } catch (error) {
             syncError = error;
             console.warn('Failed to read settings from storage.sync:', error);
-        }
-    }
-
-    if (webext?.storage?.local) {
-        try {
-            const localResult = await webext.storage.local.get(STORAGE_KEYS.SETTINGS);
-            localRaw = localResult?.[STORAGE_KEYS.SETTINGS];
-        } catch (error) {
-            localError = error;
-            console.warn('Failed to read settings from storage.local:', error);
         }
     }
 
@@ -274,19 +381,20 @@ const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Setti
     }
 
     if (syncRaw !== undefined || localRaw !== undefined) {
-        bumpLastSettingsUpdatedAt(localRaw?.__updatedAt);
-        bumpLastSettingsUpdatedAt(syncRaw?.__updatedAt);
+        const localUpdatedAt = localRaw?.__updatedAt ?? 0;
+        const syncUpdatedAt = syncRaw?.__updatedAt ?? 0;
+        bumpLastSettingsUpdatedAt(localUpdatedAt);
+        bumpLastSettingsUpdatedAt(syncUpdatedAt);
 
-        let chosen: Partial<StoredSettingsRecord> | undefined;
-        if (syncRaw !== undefined && localRaw !== undefined) {
-            const localUpdatedAt = localRaw.__updatedAt ?? 0;
-            const syncUpdatedAt = syncRaw.__updatedAt ?? 0;
-            chosen = localUpdatedAt > syncUpdatedAt ? localRaw : syncRaw;
-        } else {
-            chosen = localRaw ?? syncRaw;
-        }
-
-        return normalizeSettings(stripSettingsMetadata(chosen));
+        const { settings, fieldUpdatedAt } = mergeSettingsWithFieldTimestamps(syncRaw, localRaw);
+        return {
+            settings,
+            syncRaw,
+            localRaw,
+            syncUpdatedAt,
+            localUpdatedAt,
+            fieldUpdatedAt,
+        };
     }
 
     if (localError !== undefined || syncError !== undefined) {
@@ -294,7 +402,12 @@ const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Setti
     }
 
     if (webext?.storage?.sync || webext?.storage?.local) {
-        return normalizeSettings(null);
+        return {
+            settings: normalizeSettings(null),
+            syncUpdatedAt: 0,
+            localUpdatedAt: 0,
+            fieldUpdatedAt: {},
+        };
     }
 
     const webLocalRaw = readLocal<Partial<StoredSettingsRecord> | null>(
@@ -303,18 +416,45 @@ const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Setti
     );
     bumpLastSettingsUpdatedAt(webLocalRaw?.__updatedAt);
     void getLastSettingsUpdatedAt;
-    return normalizeSettings(stripSettingsMetadata(webLocalRaw));
+    const { settings, fieldUpdatedAt } = mergeSettingsWithFieldTimestamps(
+        undefined,
+        webLocalRaw ?? undefined,
+    );
+    return {
+        settings,
+        localRaw: webLocalRaw ?? undefined,
+        syncUpdatedAt: 0,
+        localUpdatedAt: webLocalRaw?.__updatedAt ?? 0,
+        fieldUpdatedAt,
+    };
 };
 
-const _saveSettingsRecord = async (settings: Settings): Promise<Settings> => {
-    const clean = normalizeSettings(stripSettingsMetadata(settings as StoredSettingsRecord));
-    const record: StoredSettingsRecord = {
-        ...clean,
-        __updatedAt: nextSettingsTimestamp(),
-    };
+const _getSettingsRecord = async (options?: { strict?: boolean }): Promise<Settings> => {
+    const meta = await _readSettingsWithMeta(options);
+    return meta.settings;
+};
+
+const _writeSettingsRecord = async (
+    settings: Settings,
+    fieldUpdatedAt: Partial<Record<keyof Settings, number>>,
+    updatedAt: number,
+    options?: {
+        patchedKeys?: (keyof Settings)[];
+        initialSyncUpdatedAt?: number;
+        patchValues?: Partial<Settings>;
+    },
+): Promise<Settings> => {
+    let clean = normalizeSettings(stripSettingsMetadata(settings as StoredSettingsRecord));
+    let nextFieldUpdatedAt = { ...fieldUpdatedAt };
+    let nextUpdatedAt = updatedAt;
 
     const webext = getWebExt();
     if (!webext?.storage?.sync && !webext?.storage?.local) {
+        const record: StoredSettingsRecord = {
+            ...clean,
+            __updatedAt: nextUpdatedAt,
+            __fieldUpdatedAt: nextFieldUpdatedAt,
+        };
         writeLocal(STORAGE_KEYS.SETTINGS, record);
         return clean;
     }
@@ -323,9 +463,15 @@ const _saveSettingsRecord = async (settings: Settings): Promise<Settings> => {
     let syncSaved = false;
     let lastError: unknown;
 
+    const buildRecord = (): StoredSettingsRecord => ({
+        ...clean,
+        __updatedAt: nextUpdatedAt,
+        __fieldUpdatedAt: nextFieldUpdatedAt,
+    });
+
     if (webext?.storage?.local) {
         try {
-            await webext.storage.local.set({ [STORAGE_KEYS.SETTINGS]: record });
+            await webext.storage.local.set({ [STORAGE_KEYS.SETTINGS]: buildRecord() });
             localSaved = true;
         } catch (error) {
             lastError = error;
@@ -334,7 +480,55 @@ const _saveSettingsRecord = async (settings: Settings): Promise<Settings> => {
 
     if (webext?.storage?.sync) {
         try {
-            await webext.storage.sync.set({ [STORAGE_KEYS.SETTINGS]: record });
+            // Re-check sync right before writing so a concurrent sync update arriving
+            // between the initial read and sync.set does not have untouched fields clobbered.
+            if (options?.patchedKeys && typeof webext.storage.sync.get === 'function') {
+                try {
+                    const syncCheckResult = await webext.storage.sync.get(STORAGE_KEYS.SETTINGS);
+                    const latestSync = syncCheckResult?.[STORAGE_KEYS.SETTINGS] as
+                        | Partial<StoredSettingsRecord>
+                        | undefined;
+                    const latestSyncUpdatedAt = latestSync?.__updatedAt ?? 0;
+                    if (latestSync && latestSyncUpdatedAt > (options.initialSyncUpdatedAt ?? 0)) {
+                        const patchedSet = new Set<keyof Settings>(options.patchedKeys);
+                        const mergedClean: Partial<Settings> = { ...clean };
+                        const patchedFieldMap: Partial<Record<keyof Settings, number>> = {
+                            ...nextFieldUpdatedAt,
+                        };
+                        for (const key of SETTING_KEYS) {
+                            if (patchedSet.has(key)) {
+                                if (options.patchValues && key in options.patchValues) {
+                                    (mergedClean as Record<string, unknown>)[key] =
+                                        options.patchValues[key];
+                                }
+                                continue;
+                            }
+                            const syncKeyTs = getEffectiveFieldTimestamp(latestSync, key);
+                            const ourKeyTs = nextFieldUpdatedAt[key] ?? 0;
+                            if (syncKeyTs > ourKeyTs && key in latestSync) {
+                                (mergedClean as Record<string, unknown>)[key] = latestSync[key];
+                                patchedFieldMap[key] = syncKeyTs;
+                            }
+                        }
+                        bumpLastSettingsUpdatedAt(latestSyncUpdatedAt);
+                        nextUpdatedAt = Math.max(nextUpdatedAt, nextSettingsTimestamp());
+                        for (const key of patchedSet) {
+                            patchedFieldMap[key] = nextUpdatedAt;
+                        }
+                        clean = normalizeSettings(mergedClean);
+                        nextFieldUpdatedAt = patchedFieldMap;
+                        if (webext.storage.local && localSaved) {
+                            await webext.storage.local
+                                .set({ [STORAGE_KEYS.SETTINGS]: buildRecord() })
+                                .catch(() => undefined);
+                        }
+                    }
+                } catch {
+                    // Proceed with the sync write using our latest read snapshot.
+                }
+            }
+
+            await webext.storage.sync.set({ [STORAGE_KEYS.SETTINGS]: buildRecord() });
             syncSaved = true;
         } catch (error) {
             lastError = error;
@@ -354,6 +548,37 @@ const _saveSettingsRecord = async (settings: Settings): Promise<Settings> => {
     return clean;
 };
 
+const _commitSettingsPatch = async (
+    mutator: (current: Settings) => { patch: Partial<Settings> },
+): Promise<Settings> => {
+    const meta = await _readSettingsWithMeta({ strict: true });
+    const { patch } = mutator(meta.settings);
+    const patchedKeys = Object.keys(patch) as (keyof Settings)[];
+
+    const baseTs = Math.max(meta.syncUpdatedAt, meta.localUpdatedAt);
+    bumpLastSettingsUpdatedAt(baseTs);
+    const updatedAt = nextSettingsTimestamp();
+    const nextFieldUpdatedAt: Partial<Record<keyof Settings, number>> = {
+        ...meta.fieldUpdatedAt,
+    };
+
+    for (const key of patchedKeys) {
+        nextFieldUpdatedAt[key] = updatedAt;
+    }
+
+    const nextSettings = normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        ...meta.settings,
+        ...patch,
+    });
+
+    return _writeSettingsRecord(nextSettings, nextFieldUpdatedAt, updatedAt, {
+        patchedKeys,
+        initialSyncUpdatedAt: meta.syncUpdatedAt,
+        patchValues: patch,
+    });
+};
+
 const localMutations = {
     async savePosts(posts: Post[]): Promise<void> {
         return enqueueStorageOp(() => _savePosts(posts));
@@ -362,8 +587,11 @@ const localMutations = {
     async addPost(post: Post): Promise<void> {
         return enqueueStorageOp(async () => {
             const posts = await _getPosts();
-            posts.push(post);
-            await _savePosts(posts);
+            const exists = posts.some((p) => p.id === post.id);
+            const nextPosts = exists
+                ? posts.map((p) => (p.id === post.id ? post : p))
+                : [...posts, post];
+            await _savePosts(nextPosts);
         });
     },
 
@@ -404,8 +632,11 @@ const localMutations = {
     async addVariant(variant: Variant): Promise<void> {
         return enqueueStorageOp(async () => {
             const variants = await _getVariants();
-            variants.push(variant);
-            await _saveVariants(variants);
+            const exists = variants.some((v) => v.id === variant.id);
+            const nextVariants = exists
+                ? variants.map((v) => (v.id === variant.id ? variant : v))
+                : [...variants, variant];
+            await _saveVariants(nextVariants);
         });
     },
 
@@ -435,8 +666,11 @@ const localMutations = {
     async addFolder(folder: Folder): Promise<void> {
         return enqueueStorageOp(async () => {
             const folders = await _getFolders();
-            folders.push(folder);
-            await _saveFolders(folders);
+            const exists = folders.some((f) => f.id === folder.id);
+            const nextFolders = exists
+                ? folders.map((f) => (f.id === folder.id ? folder : f))
+                : [...folders, folder];
+            await _saveFolders(nextFolders);
         });
     },
 
@@ -474,71 +708,92 @@ const localMutations = {
 
     async saveSettings(settings: Settings): Promise<void> {
         return enqueueStorageOp(async () => {
-            await _saveSettingsRecord(settings);
+            const webext = getWebExt();
+            const latest =
+                webext?.storage?.sync || webext?.storage?.local
+                    ? await _readSettingsWithMeta({ strict: false })
+                    : null;
+            if (latest) {
+                bumpLastSettingsUpdatedAt(Math.max(latest.syncUpdatedAt, latest.localUpdatedAt));
+            }
+            const updatedAt = nextSettingsTimestamp();
+            const fieldUpdatedAt: Partial<Record<keyof Settings, number>> = {};
+            for (const key of SETTING_KEYS) {
+                fieldUpdatedAt[key] = updatedAt;
+            }
+            await _writeSettingsRecord(settings, fieldUpdatedAt, updatedAt);
         });
     },
 
     async updateSettings(updates: Partial<Settings>): Promise<Settings> {
         return enqueueStorageOp(async () => {
-            const settings = await _getSettingsRecord({ strict: true });
-            return _saveSettingsRecord({ ...DEFAULT_SETTINGS, ...settings, ...updates });
+            return _commitSettingsPatch(() => ({ patch: updates }));
         });
     },
 
     async addPrompt(prompt: PolishPrompt): Promise<Settings> {
         return enqueueStorageOp(async () => {
-            const settings = await _getSettingsRecord({ strict: true });
-            const exists = settings.prompts.some((p) => p.id === prompt.id);
-            const nextPrompts = exists
-                ? settings.prompts.map((p) => (p.id === prompt.id ? prompt : p))
-                : [...settings.prompts, prompt];
-            return _saveSettingsRecord({ ...settings, prompts: nextPrompts });
+            return _commitSettingsPatch((current) => {
+                const exists = current.prompts.some((p) => p.id === prompt.id);
+                const nextPrompts = exists
+                    ? current.prompts.map((p) => (p.id === prompt.id ? prompt : p))
+                    : [...current.prompts, prompt];
+                return {
+                    patch: { prompts: nextPrompts },
+                };
+            });
         });
     },
 
     async updatePrompt(updatedPrompt: PolishPrompt): Promise<Settings> {
         return enqueueStorageOp(async () => {
-            const settings = await _getSettingsRecord({ strict: true });
-            const nextPrompts = settings.prompts.map((p) =>
-                p.id === updatedPrompt.id ? updatedPrompt : p,
-            );
-            return _saveSettingsRecord({ ...settings, prompts: nextPrompts });
+            return _commitSettingsPatch((current) => {
+                const exists = current.prompts.some((p) => p.id === updatedPrompt.id);
+                if (!exists) {
+                    throw new Error('Prompt no longer exists');
+                }
+                const nextPrompts = current.prompts.map((p) =>
+                    p.id === updatedPrompt.id ? updatedPrompt : p,
+                );
+                return {
+                    patch: { prompts: nextPrompts },
+                };
+            });
         });
     },
 
     async deletePrompt(id: string): Promise<Settings> {
         return enqueueStorageOp(async () => {
-            const settings = await _getSettingsRecord({ strict: true });
-            if (settings.prompts.length <= 1) {
-                throw new Error('Cannot delete the last prompt');
-            }
-            const nextPrompts = settings.prompts.filter((p) => p.id !== id);
-            const nextDefaultTemplate =
-                settings.defaultPolishTemplate === id
-                    ? nextPrompts[0]?.id || 'professional'
-                    : settings.defaultPolishTemplate;
-            return _saveSettingsRecord({
-                ...settings,
-                prompts: nextPrompts,
-                defaultPolishTemplate: nextDefaultTemplate,
+            return _commitSettingsPatch((current) => {
+                if (current.prompts.length <= 1) {
+                    throw new Error('Cannot delete the last prompt');
+                }
+                const nextPrompts = current.prompts.filter((p) => p.id !== id);
+                const patch: Partial<Settings> = {
+                    prompts: nextPrompts,
+                };
+                if (current.defaultPolishTemplate === id) {
+                    patch.defaultPolishTemplate = nextPrompts[0]?.id || 'professional';
+                }
+                return { patch };
             });
         });
     },
 
     async resetPrompts(): Promise<Settings> {
         return enqueueStorageOp(async () => {
-            const settings = await _getSettingsRecord({ strict: true });
-            const defaultPrompts = buildDefaultPrompts();
-            const hasCurrentDefault = defaultPrompts.some(
-                (p) => p.id === settings.defaultPolishTemplate,
-            );
-            const nextDefaultTemplate = hasCurrentDefault
-                ? settings.defaultPolishTemplate
-                : defaultPrompts[0]?.id || 'professional';
-            return _saveSettingsRecord({
-                ...settings,
-                prompts: defaultPrompts,
-                defaultPolishTemplate: nextDefaultTemplate,
+            return _commitSettingsPatch((current) => {
+                const defaultPrompts = buildDefaultPrompts();
+                const hasCurrentDefault = defaultPrompts.some(
+                    (p) => p.id === current.defaultPolishTemplate,
+                );
+                const patch: Partial<Settings> = {
+                    prompts: defaultPrompts,
+                };
+                if (!hasCurrentDefault) {
+                    patch.defaultPolishTemplate = defaultPrompts[0]?.id || 'professional';
+                }
+                return { patch };
             });
         });
     },
@@ -553,24 +808,23 @@ const runMutation = async <M extends StorageMutationMethod>(
     args: Parameters<(typeof localMutations)[M]>,
 ): Promise<Awaited<ReturnType<(typeof localMutations)[M]>>> => {
     const webext = getWebExt();
-    if (isEmbeddedFrame() && webext?.runtime?.sendMessage) {
-        let rpcResponse: StorageRpcResponse | undefined;
-        try {
-            rpcResponse = (await webext.runtime.sendMessage({
-                type: STORAGE_RPC_TYPE,
-                method,
-                args,
-            } satisfies StorageRpcMessage)) as StorageRpcResponse | undefined;
-        } catch {
-            // Fall through to local lock execution if no background listener is active.
+    if (isEmbeddedFrame()) {
+        if (!webext?.runtime?.sendMessage) {
+            throw new Error('Background storage RPC unavailable');
         }
+        const rpcResponse = (await webext.runtime.sendMessage({
+            type: STORAGE_RPC_TYPE,
+            method,
+            args,
+        } satisfies StorageRpcMessage)) as StorageRpcResponse | undefined;
 
-        if (rpcResponse && typeof rpcResponse === 'object' && rpcResponse.__polypostStorageRpc) {
-            if (!rpcResponse.ok) {
-                throw new Error(rpcResponse.error || 'Storage operation failed');
-            }
-            return rpcResponse.value as Awaited<ReturnType<(typeof localMutations)[M]>>;
+        if (!rpcResponse || typeof rpcResponse !== 'object' || !rpcResponse.__polypostStorageRpc) {
+            throw new Error('Background storage RPC unavailable');
         }
+        if (!rpcResponse.ok) {
+            throw new Error(rpcResponse.error || 'Storage operation failed');
+        }
+        return rpcResponse.value as Awaited<ReturnType<(typeof localMutations)[M]>>;
     }
 
     const fn = localMutations[method] as (...fnArgs: unknown[]) => Promise<unknown>;
