@@ -11,7 +11,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
         return (
             <div className="w-full">
                 {label && (
-                    <label className="block text-sm font-medium text-text-primary mb-1.5">
+                    <label className="block text-xs font-medium text-text-secondary mb-1.5">
                         {label}
                     </label>
                 )}
@@ -24,18 +24,18 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
                     <input
                         ref={ref}
                         className={`
-              w-full px-4 py-2 bg-bg-secondary border border-border-primary rounded-lg
-              text-text-primary placeholder-text-muted
-              focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
+              w-full h-8 px-3 py-1 text-xs bg-bg-primary border border-border-primary rounded-lg
+              text-text-primary placeholder-text-muted transition-colors duration-150
+              focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
               disabled:opacity-50 disabled:cursor-not-allowed
-              ${leftIcon ? 'pl-10' : ''}
-              ${error ? 'border-red-500' : ''}
+              ${leftIcon ? 'pl-8' : ''}
+              ${error ? 'border-[#f4212e]' : ''}
               ${className}
             `}
                         {...props}
                     />
                 </div>
-                {error && <p className="mt-1 text-sm text-red-500">{error}</p>}
+                {error && <p className="mt-1 text-xs text-[#f4212e]">{error}</p>}
             </div>
         );
     },
@@ -53,24 +53,24 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
         return (
             <div className="w-full">
                 {label && (
-                    <label className="block text-sm font-medium text-text-primary mb-1.5">
+                    <label className="block text-xs font-medium text-text-secondary mb-1.5">
                         {label}
                     </label>
                 )}
                 <textarea
                     ref={ref}
                     className={`
-            w-full px-4 py-3 bg-bg-secondary border border-border-primary rounded-lg
+            w-full px-3 py-2 text-xs bg-bg-primary border border-border-primary rounded-xl
             text-text-primary placeholder-text-muted
-            focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
+            focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent
             disabled:opacity-50 disabled:cursor-not-allowed
             resize-none
-            ${error ? 'border-red-500' : ''}
+            ${error ? 'border-[#f4212e]' : ''}
             ${className}
           `}
                     {...props}
                 />
-                {error && <p className="mt-1 text-sm text-red-500">{error}</p>}
+                {error && <p className="mt-1 text-xs text-[#f4212e]">{error}</p>}
             </div>
         );
     },

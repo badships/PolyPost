@@ -91,8 +91,8 @@ export const FolderModal: React.FC = () => {
                                 type="button"
                                 onClick={() => setSelectedColor(color)}
                                 className={`
-                  w-8 h-8 rounded-lg transition-all
-                  ${selectedColor === color ? 'ring-2 ring-white ring-offset-2 ring-offset-bg-secondary' : ''}
+                  w-8 h-8 rounded-lg
+                  ${selectedColor === color ? 'ring-2 ring-text-primary ring-offset-2 ring-offset-bg-secondary' : ''}
                 `}
                                 style={{ backgroundColor: color }}
                             />

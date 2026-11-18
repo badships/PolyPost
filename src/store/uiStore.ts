@@ -48,8 +48,7 @@ export const useUIStore = create<UIStoreState>((set) => ({
     isTranslateModalOpen: false,
 
     setViewMode: (mode) => set({ viewMode: mode }),
-    setLibraryFilter: (filter) =>
-        set({ libraryFilter: filter, selectedFolderId: null, dashboardView: 'posts' }),
+    setLibraryFilter: (filter) => set({ libraryFilter: filter, dashboardView: 'posts' }),
     setSelectedFolderId: (id) =>
         set({ selectedFolderId: id, libraryFilter: 'all', dashboardView: 'posts' }),
     setDashboardView: (view) =>

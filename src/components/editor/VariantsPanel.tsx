@@ -1,10 +1,10 @@
-import React from 'react';
-import { Sparkles, Globe, Plus, Trash2, Copy } from 'lucide-react';
-import { Card, Badge, Button } from '@/components/ui';
+import React, { useState } from 'react';
+import { Sparkles, Globe, Plus, Trash2, Copy, Check } from 'lucide-react';
 import type { Variant } from '@/types';
 import { POLISH_TEMPLATE_NAMES, LANGUAGE_NAMES } from '@/types';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSettingsStore } from '@/store';
+import { countCharacters } from '@/utils';
 
 interface VariantsPanelProps {
     variants: Variant[];
@@ -21,16 +21,18 @@ export const VariantsPanel: React.FC<VariantsPanelProps> = ({
     onGenerateMore,
     isGenerating = false,
 }) => {
-    const { t } = useTranslation();
-    const { prompts } = useSettingsStore();
+    const { t, getTemplateName } = useTranslation();
+    const prompts = useSettingsStore((s) => s.prompts);
+    const [copiedId, setCopiedId] = useState<string | null>(null);
 
     const getPromptName = (templateId?: string | null) => {
         if (!templateId) return 'Variant';
         const prompt = prompts.find((item) => item.id === templateId);
-        if (prompt?.name) return prompt.name;
-        return (
-            POLISH_TEMPLATE_NAMES[templateId as keyof typeof POLISH_TEMPLATE_NAMES] || templateId
-        );
+        const fallback =
+            prompt?.name ||
+            POLISH_TEMPLATE_NAMES[templateId as keyof typeof POLISH_TEMPLATE_NAMES] ||
+            templateId;
+        return getTemplateName(templateId, fallback);
     };
 
     const getVariantLabel = (variant: Variant) => {
@@ -45,34 +47,12 @@ export const VariantsPanel: React.FC<VariantsPanelProps> = ({
 
     const getVariantIcon = (variant: Variant) => {
         if (variant.type === 'translation') {
-            return <Globe size={14} />;
+            return <Globe size={10} />;
         }
-        return <Sparkles size={14} />;
+        return <Sparkles size={10} />;
     };
 
-    const getVariantColor = (variant: Variant) => {
-        if (variant.type === 'translation') {
-            return '#10B981'; // Green
-        }
-        switch (variant.promptTemplate) {
-            case 'professional':
-                return '#3B82F6'; // Blue
-            case 'viral':
-                return '#EF4444'; // Red
-            case 'casual':
-                return '#F59E0B'; // Orange
-            case 'technical':
-                return '#8B5CF6'; // Purple
-            case 'emoji':
-                return '#EC4899'; // Pink
-            case 'concise':
-                return '#06B6D4'; // Cyan
-            default:
-                return '#8B949E';
-        }
-    };
-
-    const handleCopy = async (content: string) => {
+    const handleCopy = async (variantId: string, content: string) => {
         if (!navigator?.clipboard?.writeText) {
             console.warn('Clipboard API is not available.');
             return;
@@ -80,12 +60,19 @@ export const VariantsPanel: React.FC<VariantsPanelProps> = ({
 
         try {
             await navigator.clipboard.writeText(content);
+            setCopiedId(variantId);
+            window.setTimeout(() => {
+                setCopiedId((current) => (current === variantId ? null : current));
+            }, 1500);
         } catch (error) {
             console.error('Failed to copy variant content:', error);
         }
     };
 
     const getVariantFooter = (variant: Variant) => {
+        if (variant.isSelected) {
+            return t('editor.variants.selected_hint');
+        }
         if (variant.type === 'polish') {
             return t('editor.variants.polished');
         }
@@ -96,101 +83,127 @@ export const VariantsPanel: React.FC<VariantsPanelProps> = ({
     };
 
     return (
-        <div className="flex flex-col h-full">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                    <h2 className="text-lg font-semibold text-text-primary">
+        <div className="flex flex-col">
+            {/* Header row with inline Regenerate action */}
+            <div className="flex items-center justify-between gap-2 mb-2 px-0.5">
+                <div className="flex items-center gap-1.5">
+                    <h2 className="text-[11.5px] font-bold text-text-secondary">
                         {t('editor.variants')}
                     </h2>
-                    <span className="text-sm text-text-muted">{variants.length}</span>
+                    <span className="inline-flex items-center justify-center h-[17px] px-1.5 rounded-full bg-bg-tertiary text-text-primary text-[10.5px] font-bold tabular-nums">
+                        {variants.length}
+                    </span>
                 </div>
+
+                <button
+                    type="button"
+                    onClick={onGenerateMore}
+                    disabled={isGenerating}
+                    className="inline-flex items-center gap-0.5 text-[11.5px] font-bold text-accent hover:underline transition-colors disabled:opacity-50"
+                >
+                    <Plus size={12} strokeWidth={2.5} />
+                    <span>
+                        {isGenerating
+                            ? t('editor.variants.generate_more.loading')
+                            : t('editor.variants.generate_more')}
+                    </span>
+                </button>
             </div>
 
             {/* Variants list */}
-            <div className="flex-1 overflow-y-auto overflow-x-visible space-y-3 p-1">
-                {variants.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-12 text-center">
-                        <div className="w-16 h-16 rounded-full bg-bg-tertiary flex items-center justify-center mb-4">
-                            <Sparkles size={24} className="text-text-muted" />
-                        </div>
-                        <p className="text-text-muted text-sm">
-                            {t('editor.variants.empty')}
-                            <br />
-                            {t('editor.variants.empty_desc')}
-                        </p>
+            {variants.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 px-4 text-center border border-dashed border-border-primary rounded-xl bg-bg-secondary/40">
+                    <div className="w-9 h-9 rounded-full bg-bg-secondary border border-border-primary flex items-center justify-center mb-2">
+                        <Sparkles size={15} className="text-text-muted" />
                     </div>
-                ) : (
-                    variants.map((variant) => (
-                        <Card
-                            key={variant.id}
-                            className={`p-4 ${variant.isSelected ? 'ring-2 ring-accent' : ''}`}
-                            onClick={() => onSelectVariant(variant.id)}
-                            hoverable
-                        >
-                            {/* Variant header */}
-                            <div className="flex items-center justify-between gap-2 mb-2">
-                                <Badge
-                                    color={getVariantColor(variant)}
-                                    className="flex items-center gap-1"
-                                >
-                                    {getVariantIcon(variant)}
-                                    {getVariantLabel(variant)}
-                                </Badge>
-                                <div className="flex items-center gap-1">
-                                    <button
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            handleCopy(variant.content);
-                                        }}
-                                        className="p-1 rounded hover:bg-bg-tertiary text-text-muted hover:text-text-primary"
-                                        aria-label={t('actions.copy')}
-                                        title={t('actions.copy')}
-                                    >
-                                        <Copy size={14} />
-                                    </button>
-                                    <button
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            onDeleteVariant(variant.id);
-                                        }}
-                                        className="p-1 rounded hover:bg-bg-tertiary text-text-muted hover:text-red-400"
-                                        aria-label={t('actions.delete')}
-                                        title={t('actions.delete')}
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
+                    <p className="text-text-muted text-xs leading-relaxed">
+                        {t('editor.variants.empty')}
+                        <br />
+                        {t('editor.variants.empty_desc')}
+                    </p>
+                </div>
+            ) : (
+                <div className="space-y-2 pb-4">
+                    {variants.map((variant) => {
+                        const isCopied = copiedId === variant.id;
+                        const charCount = countCharacters(variant.content);
+                        return (
+                            <div
+                                key={variant.id}
+                                onClick={() => onSelectVariant(variant.id)}
+                                className={`rounded-xl p-2.5 border cursor-pointer transition-colors ${
+                                    variant.isSelected
+                                        ? 'bg-accent/[0.08] border-accent/50'
+                                        : 'bg-bg-primary border-border-primary hover:border-border-secondary hover:bg-bg-secondary/60'
+                                }`}
+                            >
+                                {/* Variant header */}
+                                <div className="flex items-center justify-between gap-2 mb-1.5">
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                        <span className="inline-flex items-center gap-1 h-5 px-2 rounded-full bg-bg-secondary border border-border-primary text-[10.5px] font-bold text-text-primary truncate">
+                                            {getVariantIcon(variant)}
+                                            <span className="truncate">
+                                                {getVariantLabel(variant)}
+                                            </span>
+                                        </span>
+                                        {variant.isSelected && (
+                                            <span className="inline-flex items-center gap-1 h-5 px-2 rounded-full bg-accent text-white text-[10px] font-bold shrink-0">
+                                                <Check size={10} strokeWidth={3} />
+                                                <span>{t('editor.variant.active')}</span>
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-0.5 shrink-0">
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                void handleCopy(variant.id, variant.content);
+                                            }}
+                                            className={`w-6 h-6 rounded-full inline-flex items-center justify-center hover:bg-bg-tertiary transition-colors ${
+                                                isCopied
+                                                    ? 'text-status-posted'
+                                                    : 'text-text-muted hover:text-text-primary'
+                                            }`}
+                                            aria-label={
+                                                isCopied ? t('actions.copied') : t('actions.copy')
+                                            }
+                                            title={
+                                                isCopied ? t('actions.copied') : t('actions.copy')
+                                            }
+                                        >
+                                            {isCopied ? <Check size={12} /> : <Copy size={12} />}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                onDeleteVariant(variant.id);
+                                            }}
+                                            className="w-6 h-6 rounded-full inline-flex items-center justify-center hover:bg-[#f4212e]/10 text-text-muted hover:text-[#f4212e] transition-colors"
+                                            aria-label={t('actions.delete')}
+                                            title={t('actions.delete')}
+                                        >
+                                            <Trash2 size={12} />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Content preview */}
+                                <p className="text-[13px] text-text-primary leading-[1.48] my-1.5 whitespace-pre-wrap break-words">
+                                    {variant.content}
+                                </p>
+
+                                {/* Footer */}
+                                <div className="flex items-center justify-between text-[11px] text-text-secondary">
+                                    <span>{getVariantFooter(variant)}</span>
+                                    <span className="tabular-nums">{charCount} / 280</span>
                                 </div>
                             </div>
-
-                            {/* Content preview */}
-                            <p className="text-sm text-text-primary leading-relaxed mb-3 whitespace-pre-wrap break-words">
-                                {variant.content}
-                            </p>
-
-                            {/* Footer */}
-                            <div className="text-xs text-text-muted">
-                                {getVariantFooter(variant)}
-                            </div>
-                        </Card>
-                    ))
-                )}
-            </div>
-
-            {/* Generate more button */}
-            <div className="mt-4 pt-4 border-t border-border-primary">
-                <Button
-                    variant="ghost"
-                    className="w-full justify-center"
-                    leftIcon={<Plus size={18} />}
-                    onClick={onGenerateMore}
-                    isLoading={isGenerating}
-                >
-                    {isGenerating
-                        ? t('editor.variants.generate_more.loading')
-                        : t('editor.variants.generate_more')}
-                </Button>
-            </div>
+                        );
+                    })}
+                </div>
+            )}
         </div>
     );
 };

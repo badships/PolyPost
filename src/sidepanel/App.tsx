@@ -3,14 +3,16 @@ import { Dashboard } from './Dashboard';
 import { Editor } from './Editor';
 import { Settings } from './Settings';
 import { useSettingsStore, usePostsStore, useFoldersStore } from '@/store';
+import { applyThemeToDocument } from '@/utils';
 
 type Page = 'dashboard' | 'editor' | 'settings';
 
 export const App: React.FC = () => {
     const [currentPage, setCurrentPage] = useState<Page>('dashboard');
-    const { loadSettings } = useSettingsStore();
-    const { loadPosts } = usePostsStore();
-    const { loadFolders } = useFoldersStore();
+    const loadSettings = useSettingsStore((s) => s.loadSettings);
+    const theme = useSettingsStore((s) => s.theme);
+    const loadPosts = usePostsStore((s) => s.loadPosts);
+    const loadFolders = useFoldersStore((s) => s.loadFolders);
 
     // Load initial data
     useEffect(() => {
@@ -19,30 +21,15 @@ export const App: React.FC = () => {
         loadFolders();
     }, [loadSettings, loadPosts, loadFolders]);
 
-    // Apply theme
-    const { theme } = useSettingsStore();
-
     useEffect(() => {
-        const root = window.document.documentElement;
-        root.classList.remove('light', 'dark');
+        applyThemeToDocument(theme);
 
         if (theme === 'system') {
             const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-
-            const applySystemTheme = () => {
-                const systemTheme = mediaQuery.matches ? 'dark' : 'light';
-                // Ensure we don't duplicate classes if logic runs multiple times
-                root.classList.remove('light', 'dark');
-                root.classList.add(systemTheme);
-            };
-
-            applySystemTheme();
-
-            mediaQuery.addEventListener('change', applySystemTheme);
-            return () => mediaQuery.removeEventListener('change', applySystemTheme);
+            const handleSystemChange = () => applyThemeToDocument('system');
+            mediaQuery.addEventListener('change', handleSystemChange);
+            return () => mediaQuery.removeEventListener('change', handleSystemChange);
         }
-
-        root.classList.add(theme);
     }, [theme]);
 
     const navigateToDashboard = () => {
@@ -59,7 +46,12 @@ export const App: React.FC = () => {
 
     switch (currentPage) {
         case 'editor':
-            return <Editor onNavigateBack={navigateToDashboard} />;
+            return (
+                <Editor
+                    onNavigateBack={navigateToDashboard}
+                    onNavigateToSettings={navigateToSettings}
+                />
+            );
         case 'settings':
             return <Settings onNavigateBack={navigateToDashboard} />;
         default:

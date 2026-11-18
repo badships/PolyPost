@@ -1,26 +1,58 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ArrowLeft, Save, Send } from 'lucide-react';
-import { Button } from '@/components/ui';
+import { ArrowUpRight, ChevronLeft } from 'lucide-react';
+import { Button, Badge } from '@/components/ui';
 import { SourceEditor, VariantsPanel, PolishModal, TranslateModal } from '@/components/editor';
-import { usePostsStore, useSettingsStore, useUIStore } from '@/store';
+import { usePostsStore, useSettingsStore, useUIStore, useFoldersStore } from '@/store';
 import { aiService } from '@/services/ai';
 import { resolveActiveProviderConfig } from '@/services/settingsDefaults';
 import { ensureHostPermission } from '@/services/permissions';
 import { twitterService } from '@/services/twitter';
-import type { PolishTemplate, Language } from '@/types';
+import type { PolishTemplate, Language, BuiltInProviderId } from '@/types';
 import { LANGUAGE_NAMES, POLISH_TEMPLATE_NAMES } from '@/types';
 import { useTranslation } from '@/hooks/useTranslation';
 
+const PROVIDER_SHORT_NAMES: Record<BuiltInProviderId, string> = {
+    openai: 'OpenAI',
+    anthropic: 'Claude',
+    gemini: 'Gemini',
+    xai: 'Grok',
+    deepseek: 'DeepSeek',
+    qwen: 'Qwen',
+    kimi: 'Kimi',
+    zhipu: 'GLM',
+    openrouter: 'OpenRouter',
+};
+
 interface EditorProps {
     onNavigateBack: () => void;
+    onNavigateToSettings?: () => void;
 }
 
-export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
-    const { t } = useTranslation();
-    const { currentPostId, getPostById, updatePost, addVariant, selectVariant, deleteVariant } =
-        usePostsStore();
+export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSettings }) => {
+    const { t, getTemplateName } = useTranslation();
+    const {
+        currentPostId,
+        getPostById,
+        updatePost,
+        addVariant,
+        selectVariant,
+        deselectVariants,
+        deleteVariant,
+    } = usePostsStore();
+    const { folders } = useFoldersStore();
     const variants = usePostsStore((s) => s.getVariantsByPostId(currentPostId || ''));
-    const { prompts, defaultLanguage } = useSettingsStore();
+    const {
+        prompts,
+        defaultLanguage,
+        provider,
+        providerConfigs,
+        customProviders,
+        activeCustomProviderId,
+        openaiApiKey,
+        customApiUrl,
+        customApiKey,
+        modelName,
+    } = useSettingsStore();
     const {
         isPolishModalOpen,
         isTranslateModalOpen,
@@ -44,6 +76,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const contentRef = useRef(content);
     const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
+    const editVersionRef = useRef(0);
+    const loadedPostIdRef = useRef<string | null>(null);
 
     // Get selected variant content (if any)
     const selectedVariant = variants.find((v) => v.isSelected);
@@ -51,10 +85,11 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
     const getPromptName = (templateId?: string | null) => {
         if (!templateId) return 'Variant';
         const prompt = prompts.find((item) => item.id === templateId);
-        if (prompt?.name) return prompt.name;
-        return (
-            POLISH_TEMPLATE_NAMES[templateId as keyof typeof POLISH_TEMPLATE_NAMES] || templateId
-        );
+        const fallback =
+            prompt?.name ||
+            POLISH_TEMPLATE_NAMES[templateId as keyof typeof POLISH_TEMPLATE_NAMES] ||
+            templateId;
+        return getTemplateName(templateId, fallback);
     };
 
     const selectedVariantLabel = selectedVariant
@@ -65,9 +100,20 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
 
     // Update content when post changes
     useEffect(() => {
-        if (post) {
+        if (!post) {
+            loadedPostIdRef.current = null;
+            return;
+        }
+        if (loadedPostIdRef.current !== post.id) {
+            loadedPostIdRef.current = post.id;
+            editVersionRef.current += 1;
+            contentRef.current = post.sourceContent;
+            hasUnsavedChangesRef.current = false;
             setContent(post.sourceContent);
             setHasUnsavedChanges(false);
+        } else if (!hasUnsavedChangesRef.current && post.sourceContent !== contentRef.current) {
+            contentRef.current = post.sourceContent;
+            setContent(post.sourceContent);
         }
     }, [post]);
 
@@ -89,35 +135,72 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
     }, [currentPostId, updatePost]);
 
     const handleContentChange = (newContent: string) => {
+        editVersionRef.current += 1;
+        contentRef.current = newContent;
+        hasUnsavedChangesRef.current = true;
         setContent(newContent);
         setError(null);
         setHasUnsavedChanges(true);
     };
 
     const handleBlur = useCallback(async () => {
-        if (!currentPostId || !hasUnsavedChanges) return;
+        if (!currentPostId || !hasUnsavedChangesRef.current) return;
+        const versionAtStart = editVersionRef.current;
+        const contentToSave = contentRef.current;
         try {
-            await updatePost(currentPostId, { sourceContent: content });
-            setHasUnsavedChanges(false);
+            await updatePost(currentPostId, { sourceContent: contentToSave });
+            if (editVersionRef.current === versionAtStart) {
+                hasUnsavedChangesRef.current = false;
+                setHasUnsavedChanges(false);
+            }
         } catch (err) {
             console.error('Save on blur failed:', err);
         }
-    }, [currentPostId, content, hasUnsavedChanges, updatePost]);
+    }, [currentPostId, updatePost]);
+
+    const handleClearSource = useCallback(async () => {
+        const versionAtClear = editVersionRef.current + 1;
+        editVersionRef.current = versionAtClear;
+        contentRef.current = '';
+        setContent('');
+        setError(null);
+        if (!currentPostId) {
+            hasUnsavedChangesRef.current = false;
+            setHasUnsavedChanges(false);
+            return;
+        }
+        hasUnsavedChangesRef.current = true;
+        setHasUnsavedChanges(true);
+        try {
+            await updatePost(currentPostId, { sourceContent: '' });
+            if (editVersionRef.current === versionAtClear) {
+                hasUnsavedChangesRef.current = false;
+                setHasUnsavedChanges(false);
+            }
+        } catch (err) {
+            console.error('Clear source failed:', err);
+        }
+    }, [currentPostId, updatePost]);
 
     const handleSave = async () => {
         if (!currentPostId) return;
+        const versionAtStart = editVersionRef.current;
+        const contentToSave = contentRef.current;
         setIsSaving(true);
         try {
-            await updatePost(currentPostId, { sourceContent: content });
-            setHasUnsavedChanges(false);
+            await updatePost(currentPostId, { sourceContent: contentToSave });
+            if (editVersionRef.current === versionAtStart) {
+                hasUnsavedChangesRef.current = false;
+                setHasUnsavedChanges(false);
+            }
         } finally {
             setIsSaving(false);
         }
     };
 
     const handleNavigateBack = async () => {
-        if (hasUnsavedChanges && currentPostId) {
-            await updatePost(currentPostId, { sourceContent: content });
+        if (hasUnsavedChangesRef.current && currentPostId) {
+            await updatePost(currentPostId, { sourceContent: contentRef.current });
         }
         onNavigateBack();
     };
@@ -294,77 +377,142 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack }) => {
         await selectVariant(variantId);
     };
 
+    const handleUseSource = async () => {
+        if (currentPostId) {
+            await deselectVariants(currentPostId);
+        }
+    };
+
     const handleDeleteVariant = async (variantId: string) => {
         await deleteVariant(variantId);
     };
 
+    const postStatus = post?.status || 'draft';
+
+    const activeConfig = resolveActiveProviderConfig({
+        provider,
+        providerConfigs,
+        customProviders,
+        activeCustomProviderId,
+        openaiApiKey,
+        customApiUrl,
+        customApiKey,
+        modelName,
+    });
+    const activeCustom =
+        customProviders.find((c) => c.id === activeCustomProviderId) || customProviders[0];
+    const providerLabel = activeConfig.isCustom
+        ? activeCustom?.name || 'Custom'
+        : PROVIDER_SHORT_NAMES[activeConfig.provider as BuiltInProviderId] || activeConfig.provider;
+    const modelShortLabel = activeConfig.modelName
+        ? `${providerLabel} · ${activeConfig.modelName}`
+        : providerLabel;
+    const hasApiKey = Boolean(activeConfig.apiKey);
+
+    const handleChangeFolder = async (folderId: string | null) => {
+        if (!currentPostId) return;
+        await updatePost(currentPostId, { folderId });
+    };
+
+    const handleQuickTranslate = async (
+        targetLanguage: Language,
+        sourceMode: 'source' | 'selected',
+    ) => {
+        await handleTranslate([targetLanguage], sourceMode);
+    };
+
     return (
-        <div className="flex flex-col h-screen bg-bg-primary">
-            {/* Header */}
-            <header className="h-14 border-b border-border-primary flex items-center justify-between px-4">
-                <div className="flex items-center gap-4">
+        <div className="flex flex-col h-screen bg-bg-primary text-text-primary">
+            {/* Compact X-Native Studio Header */}
+            <header className="sticky top-0 z-20 h-11 shrink-0 bg-bg-primary/85 backdrop-blur-md border-b border-border-primary flex items-center justify-between gap-2 px-3">
+                <div className="flex items-center gap-1.5 min-w-0">
                     <button
                         onClick={handleNavigateBack}
-                        className="p-2 rounded-lg hover:bg-bg-secondary text-text-muted hover:text-text-primary"
+                        className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-bg-tertiary text-text-secondary hover:text-text-primary transition-colors shrink-0"
+                        aria-label="Back"
                     >
-                        <ArrowLeft size={20} />
+                        <ChevronLeft size={17} />
                     </button>
-                </div>
 
-                <div className="flex items-center gap-3">
-                    {/* Selected variant indicator */}
-                    {selectedVariant && (
-                        <span className="text-xs text-accent bg-accent/10 px-2 py-1 rounded">
-                            {selectedVariant.type === 'translation'
-                                ? t(
-                                      'editor.using.translation',
-                                      selectedVariant.language
-                                          ? LANGUAGE_NAMES[selectedVariant.language]
-                                          : '',
-                                  )
-                                : t('editor.using', getPromptName(selectedVariant.promptTemplate))}
-                        </span>
+                    <Badge variant={postStatus === 'posted' ? 'posted' : 'draft'}>
+                        {postStatus === 'posted' ? t('post.status.posted') : t('post.status.draft')}
+                    </Badge>
+
+                    <button
+                        onClick={handleSave}
+                        disabled={isSaving || !hasUnsavedChanges}
+                        className={`text-[11px] truncate transition-colors ${
+                            hasUnsavedChanges
+                                ? 'text-accent hover:text-accent-hover font-semibold cursor-pointer'
+                                : 'text-text-muted cursor-default'
+                        }`}
+                    >
+                        {isSaving
+                            ? t('editor.saving')
+                            : hasUnsavedChanges
+                              ? `${t('editor.save')}*`
+                              : t('editor.saved')}
+                    </button>
+
+                    {onNavigateToSettings && (
+                        <button
+                            onClick={onNavigateToSettings}
+                            title={modelShortLabel}
+                            className="hidden min-[340px]:inline-flex items-center gap-1 h-5 px-2 rounded-full bg-bg-secondary border border-border-primary hover:border-border-secondary text-[10.5px] text-text-secondary hover:text-text-primary transition-colors min-w-0 max-w-[110px]"
+                        >
+                            <span
+                                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                    hasApiKey ? 'bg-[#00ba7c]' : 'bg-[#ffd400]'
+                                }`}
+                            />
+                            <span className="truncate">{modelShortLabel}</span>
+                        </button>
                     )}
-
-                    <Button variant="secondary" onClick={handleSave} isLoading={isSaving}>
-                        <Save size={16} className="mr-1.5" />
-                        {hasUnsavedChanges ? `${t('editor.save')}*` : t('editor.saved')}
-                    </Button>
-                    <Button leftIcon={<Send size={16} />} onClick={handlePublish}>
-                        <span className="hidden sm:inline">{t('editor.post_to_x')}</span>
-                    </Button>
                 </div>
+
+                <Button size="sm" rightIcon={<ArrowUpRight size={13} />} onClick={handlePublish}>
+                    {t('editor.post_to_x')}
+                </Button>
             </header>
 
             {/* Error message */}
             {error && (
-                <div className="mx-4 mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+                <div className="mx-3 mt-2.5 px-3 py-2 bg-[#f4212e]/10 border border-[#f4212e]/30 rounded-xl text-[#f4212e] text-xs shrink-0">
                     {error}
                 </div>
             )}
 
-            {/* Main content */}
-            <div className="flex-1 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-rows-1 lg:grid-cols-[minmax(0,1fr)_24rem] overflow-hidden">
-                {/* Source editor */}
-                <div className="min-h-0 p-4 lg:p-6 overflow-y-auto border-b border-border-primary lg:border-b-0 lg:border-r">
+            {/* Unified Scrollable Composer Studio */}
+            <div className="flex-1 overflow-y-auto px-3 py-2.5">
+                <div className="max-w-5xl mx-auto w-full space-y-3 lg:space-y-0 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-4 lg:items-start">
                     <SourceEditor
                         content={content}
                         onChange={handleContentChange}
                         onBlur={handleBlur}
+                        onClear={handleClearSource}
                         onPolish={openPolishModal}
+                        onPolishTemplate={handlePolish}
                         onTranslate={openTranslateModal}
+                        onQuickTranslate={handleQuickTranslate}
+                        prompts={prompts}
+                        folders={folders}
+                        currentFolderId={post?.folderId ?? null}
+                        onChangeFolder={handleChangeFolder}
+                        activeModelName={activeConfig.modelName || providerLabel}
+                        defaultLanguage={defaultLanguage}
+                        hasSelectedVariant={Boolean(selectedVariant)}
+                        selectedVariantLabel={selectedVariantLabel}
+                        onUseSource={handleUseSource}
                         isPolishing={isPolishing}
                         isTranslating={isTranslating}
                     />
-                </div>
 
-                {/* Variants panel */}
-                <div className="min-h-0 p-4 lg:p-6 overflow-y-auto border-t border-border-primary lg:border-t-0">
                     <VariantsPanel
                         variants={variants}
                         onSelectVariant={handleSelectVariant}
                         onDeleteVariant={handleDeleteVariant}
                         onGenerateMore={openPolishModal}
+                        isGenerating={isPolishing}
                     />
                 </div>
             </div>

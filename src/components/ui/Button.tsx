@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-    variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+    variant?: 'primary' | 'accent' | 'secondary' | 'ghost' | 'danger';
     size?: 'sm' | 'md' | 'lg';
     isLoading?: boolean;
     leftIcon?: React.ReactNode;
@@ -20,20 +20,21 @@ export const Button: React.FC<ButtonProps> = ({
     ...props
 }) => {
     const baseStyles =
-        'inline-flex items-center justify-center whitespace-nowrap shrink-0 font-medium rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed';
+        'inline-flex items-center justify-center whitespace-nowrap shrink-0 rounded-full transition-colors duration-150 disabled:opacity-45 disabled:cursor-not-allowed';
 
     const variantStyles = {
-        primary: 'bg-accent hover:bg-accent-hover text-white',
+        primary: 'bg-cta-bg hover:bg-cta-hover text-cta-text font-bold',
+        accent: 'bg-accent hover:bg-accent-hover text-white font-bold',
         secondary:
-            'bg-bg-tertiary hover:bg-border-primary text-text-primary border border-border-primary',
-        ghost: 'bg-transparent hover:bg-bg-tertiary text-text-secondary hover:text-text-primary',
-        danger: 'bg-red-600 hover:bg-red-700 text-white',
+            'bg-bg-secondary hover:bg-bg-tertiary text-text-primary border border-border-primary font-semibold',
+        ghost: 'bg-transparent hover:bg-bg-tertiary text-text-secondary hover:text-text-primary font-semibold',
+        danger: 'bg-[#f4212e] hover:bg-[#dc1e2a] text-white font-bold',
     };
 
     const sizeStyles = {
-        sm: 'px-3 py-1.5 text-sm gap-1.5',
-        md: 'px-4 py-2 text-sm gap-2',
-        lg: 'px-6 py-3 text-base gap-2',
+        sm: 'h-7 px-3 text-xs gap-1.5',
+        md: 'h-8 px-3.5 text-xs gap-1.5',
+        lg: 'h-9 px-4 text-sm gap-2',
     };
 
     return (

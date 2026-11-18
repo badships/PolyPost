@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { ArrowLeft, Key, Globe, Palette, Laptop, Plus, Trash2 } from 'lucide-react';
+import { ChevronLeft, Key, Globe, Palette, Sun, Moon, Laptop, Plus, Trash2 } from 'lucide-react';
 import { Button, Input } from '@/components/ui';
 import { useSettingsStore } from '@/store';
 import type {
@@ -47,6 +47,18 @@ const PROVIDER_LABEL_KEYS: Record<ProviderId, DictionaryKey> = {
     zhipu: 'settings.provider.zhipu',
     openrouter: 'settings.provider.openrouter',
     custom: 'settings.provider.custom',
+};
+
+const PROVIDER_MATRIX_LABELS: Record<BuiltInProviderId, string> = {
+    openai: 'OpenAI',
+    anthropic: 'Claude',
+    gemini: 'Gemini',
+    xai: 'Grok',
+    deepseek: 'DeepSeek',
+    qwen: 'Qwen',
+    kimi: 'Kimi',
+    zhipu: 'GLM',
+    openrouter: 'OpenRouter',
 };
 
 interface AiFormState {
@@ -100,10 +112,16 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
         setUiLanguage,
     } = useSettingsStore();
 
-    const { t } = useTranslation();
+    const { t, getTemplateName } = useTranslation();
     const promptOptions = prompts.length
-        ? prompts.map((prompt) => ({ id: prompt.id, name: prompt.name }))
-        : Object.entries(POLISH_TEMPLATE_NAMES).map(([id, name]) => ({ id, name }));
+        ? prompts.map((prompt) => ({
+              id: prompt.id,
+              name: getTemplateName(prompt.id, prompt.name),
+          }))
+        : Object.entries(POLISH_TEMPLATE_NAMES).map(([id, name]) => ({
+              id,
+              name: getTemplateName(id, name),
+          }));
 
     const [form, setForm] = useState<AiFormState>(() => ({
         provider: provider || 'openai',
@@ -396,269 +414,157 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
             ? activeBuiltInConfig.modelName.trim()
             : CUSTOM_MODEL_OPTION_VALUE;
 
+    const isActiveConfigured = activeBuiltInProvider
+        ? Boolean(activeBuiltInConfig?.apiKey?.trim())
+        : Boolean(activeCustomChannel?.baseUrl?.trim() && activeCustomChannel?.apiKey?.trim());
+
     return (
-        <div className="flex flex-col h-screen bg-bg-primary">
-            {/* Header */}
-            <header className="h-14 shrink-0 border-b border-border-primary flex items-center px-4">
-                <button
-                    onClick={onNavigateBack}
-                    className="p-2 rounded-lg hover:bg-bg-secondary text-text-muted hover:text-text-primary"
-                >
-                    <ArrowLeft size={20} />
-                </button>
-                <h1 className="ml-4 text-lg font-semibold text-text-primary">
-                    {t('settings.title')}
-                </h1>
+        <div className="flex flex-col h-screen bg-bg-primary text-text-primary">
+            {/* Compact Sticky X-Native Header */}
+            <header className="sticky top-0 z-20 h-11 shrink-0 border-b border-border-primary flex items-center justify-between gap-2 px-3 bg-bg-primary/85 backdrop-blur-md">
+                <div className="flex items-center gap-1.5 min-w-0">
+                    <button
+                        onClick={onNavigateBack}
+                        className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-bg-tertiary text-text-secondary hover:text-text-primary transition-colors shrink-0"
+                        aria-label="Back"
+                    >
+                        <ChevronLeft size={17} />
+                    </button>
+                    <h1 className="text-[13.5px] font-bold text-text-primary truncate">
+                        {t('settings.title')}
+                    </h1>
+                </div>
+
+                <span className="inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full bg-bg-secondary border border-border-primary text-[11px] font-mono text-text-secondary shrink-0">
+                    <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                            isActiveConfigured ? 'bg-[#00ba7c]' : 'bg-[#ffd400]'
+                        }`}
+                    />
+                    <span>
+                        {activeBuiltInProvider
+                            ? PROVIDER_MATRIX_LABELS[activeBuiltInProvider]
+                            : activeCustomChannel?.name.trim() || 'Custom'}
+                    </span>
+                </span>
             </header>
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-6 max-w-2xl">
-                {/* AI Configuration */}
-                <section className="mb-8">
-                    <div className="flex items-center gap-2 mb-4">
-                        <Key size={20} className="text-accent" />
-                        <h2 className="text-lg font-semibold text-text-primary">
-                            {t('settings.ai.title')}
-                        </h2>
-                    </div>
-
-                    <div className="space-y-4 bg-bg-secondary rounded-xl p-4 border border-border-primary">
-                        {/* Provider Selection */}
-                        <div>
-                            <label className="block text-sm font-medium text-text-primary mb-2">
-                                {t('settings.provider.label')}
-                            </label>
-                            <select
-                                value={form.provider}
-                                onChange={(e) => handleProviderChange(e.target.value as ProviderId)}
-                                className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
-                            >
-                                {BUILTIN_PROVIDER_IDS.map((id) => (
-                                    <option key={id} value={id}>
-                                        {t(PROVIDER_LABEL_KEYS[id])}
-                                    </option>
-                                ))}
-                                <option value="custom">{t('settings.provider.custom')}</option>
-                            </select>
-                            <p className="text-xs text-text-muted mt-2">
-                                {activeBuiltInDef
-                                    ? t('settings.provider.endpoint_hint', activeBuiltInDef.baseUrl)
-                                    : t('settings.permission_hint')}
-                            </p>
+            <div className="flex-1 overflow-y-auto px-3 py-3">
+                <div className="max-w-xl mx-auto w-full space-y-4 pb-4">
+                    {/* AI Configuration */}
+                    <section>
+                        <div className="flex items-center justify-between gap-2 mb-2 px-0.5">
+                            <div className="flex items-center gap-1.5">
+                                <Key size={13} className="text-accent" />
+                                <h2 className="text-[11.5px] font-bold text-text-secondary">
+                                    {t('settings.ai.title')}
+                                </h2>
+                            </div>
+                            <span className="text-[10.5px] font-mono text-text-muted">
+                                9 + Custom
+                            </span>
                         </div>
 
-                        {activeBuiltInProvider && activeBuiltInDef && activeBuiltInConfig ? (
-                            <>
-                                <div>
-                                    <label className="block text-sm font-medium text-text-primary mb-2">
-                                        {t(
-                                            'settings.apikey.provider_label',
-                                            t(PROVIDER_LABEL_KEYS[activeBuiltInProvider]),
+                        <div className="space-y-3 bg-bg-secondary rounded-xl p-3 border border-border-primary">
+                            {/* 3x3 Built-In Provider Matrix + Custom Selector */}
+                            <div>
+                                <label className="block text-[11px] font-semibold text-text-muted mb-1.5">
+                                    {t('settings.provider.label')}
+                                </label>
+                                <div className="grid grid-cols-3 gap-1.5">
+                                    {BUILTIN_PROVIDER_IDS.map((id) => {
+                                        const isSelected = form.provider === id;
+                                        const hasKey = Boolean(
+                                            form.providerConfigs[id]?.apiKey?.trim(),
+                                        );
+                                        const label =
+                                            id === 'qwen' && uiLanguage === 'zh'
+                                                ? '千问 Qwen'
+                                                : id === 'zhipu' && uiLanguage === 'zh'
+                                                  ? '智谱 GLM'
+                                                  : PROVIDER_MATRIX_LABELS[id];
+                                        return (
+                                            <button
+                                                key={id}
+                                                type="button"
+                                                onClick={() => handleProviderChange(id)}
+                                                className={`h-7 px-2 rounded-lg border text-[11px] font-semibold flex items-center justify-between gap-1 transition-colors min-w-0 ${
+                                                    isSelected
+                                                        ? 'border-accent bg-accent/10 text-text-primary'
+                                                        : 'border-border-primary bg-bg-primary text-text-secondary hover:border-border-secondary hover:text-text-primary'
+                                                }`}
+                                                title={t(PROVIDER_LABEL_KEYS[id])}
+                                            >
+                                                <span className="truncate">{label}</span>
+                                                {hasKey && (
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-[#00ba7c] shrink-0" />
+                                                )}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                <button
+                                    type="button"
+                                    onClick={() => handleProviderChange('custom')}
+                                    className={`mt-1.5 w-full h-7 px-2.5 rounded-lg border text-[11px] font-semibold flex items-center justify-between gap-2 transition-colors ${
+                                        form.provider === 'custom'
+                                            ? 'border-accent bg-accent/10 text-text-primary'
+                                            : 'border-border-primary bg-bg-primary text-text-secondary hover:border-border-secondary hover:text-text-primary'
+                                    }`}
+                                >
+                                    <span className="truncate">
+                                        {t('settings.provider.custom')}
+                                    </span>
+                                    <span className="inline-flex items-center gap-1.5 shrink-0 text-[10.5px] font-mono text-text-muted">
+                                        <span>{form.customProviders.length}</span>
+                                        {Boolean(
+                                            activeCustomChannel?.baseUrl?.trim() &&
+                                            activeCustomChannel?.apiKey?.trim(),
+                                        ) && (
+                                            <span className="w-1.5 h-1.5 rounded-full bg-[#00ba7c]" />
                                         )}
-                                    </label>
-                                    <div className="flex gap-2 items-center">
-                                        <div className="flex-1 min-w-0">
-                                            <Input
-                                                type={showApiKey ? 'text' : 'password'}
-                                                value={activeBuiltInConfig.apiKey}
-                                                onChange={(e) =>
-                                                    updateBuiltInField(activeBuiltInProvider, {
-                                                        apiKey: e.target.value,
-                                                    })
-                                                }
-                                                placeholder={t('settings.apikey.placeholder')}
-                                                className="bg-bg-tertiary"
-                                            />
-                                        </div>
-                                        <Button
-                                            variant="ghost"
-                                            onClick={() => setShowApiKey(!showApiKey)}
-                                        >
-                                            {showApiKey ? t('settings.hide') : t('settings.show')}
-                                        </Button>
-                                    </div>
-                                    <p className="text-xs text-text-muted mt-2">
-                                        {t('settings.apikey.help')}
-                                    </p>
-                                </div>
+                                    </span>
+                                </button>
 
-                                <div>
-                                    <label className="block text-sm font-medium text-text-primary mb-2">
-                                        {t('settings.modelPreset.label')}
-                                    </label>
-                                    <select
-                                        value={selectedModelPreset}
-                                        onChange={(e) => {
-                                            const nextModel =
-                                                e.target.value === CUSTOM_MODEL_OPTION_VALUE
-                                                    ? isBuiltInModelForProvider(
-                                                          activeBuiltInProvider,
-                                                          activeBuiltInConfig.modelName.trim(),
-                                                      )
-                                                        ? ''
-                                                        : activeBuiltInConfig.modelName
-                                                    : e.target.value;
-                                            updateBuiltInField(activeBuiltInProvider, {
-                                                modelName: nextModel,
-                                            });
-                                        }}
-                                        className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
-                                    >
-                                        {activeProviderModelOptions.map((option) => (
-                                            <option key={option} value={option}>
-                                                {option}
-                                            </option>
-                                        ))}
-                                        <option value={CUSTOM_MODEL_OPTION_VALUE}>
-                                            {t('settings.modelPreset.custom')}
-                                        </option>
-                                    </select>
-                                </div>
+                                <p className="text-[11px] text-text-muted mt-2 font-mono break-all">
+                                    {activeBuiltInDef
+                                        ? t(
+                                              'settings.provider.endpoint_hint',
+                                              activeBuiltInDef.baseUrl,
+                                          )
+                                        : t('settings.permission_hint')}
+                                </p>
+                            </div>
 
-                                <div>
-                                    <label className="block text-sm font-medium text-text-primary mb-2">
-                                        {t('settings.modelName.label')}
-                                    </label>
-                                    <Input
-                                        type="text"
-                                        value={activeBuiltInConfig.modelName}
-                                        onChange={(e) =>
-                                            updateBuiltInField(activeBuiltInProvider, {
-                                                modelName: e.target.value,
-                                            })
-                                        }
-                                        placeholder={activeBuiltInDef.defaultModel}
-                                        className="bg-bg-tertiary"
-                                    />
-                                    <p className="text-xs text-text-muted mt-2">
-                                        {t('settings.modelName.help')}
-                                    </p>
-                                </div>
-                            </>
-                        ) : (
-                            activeCustomChannel && (
+                            {activeBuiltInProvider && activeBuiltInDef && activeBuiltInConfig ? (
                                 <>
-                                    {/* Custom Channel Switcher */}
                                     <div>
-                                        <label className="block text-sm font-medium text-text-primary mb-2">
-                                            {t('settings.customChannel.label')}
-                                        </label>
-                                        <div className="flex flex-wrap gap-2">
-                                            <select
-                                                value={activeCustomChannel.id}
-                                                onChange={(e) =>
-                                                    handleSelectCustomChannel(e.target.value)
-                                                }
-                                                className="flex-1 min-w-[160px] px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
-                                            >
-                                                {form.customProviders.map((channel, index) => (
-                                                    <option key={channel.id} value={channel.id}>
-                                                        {channel.name.trim() ||
-                                                            t(
-                                                                'settings.customChannel.default_name',
-                                                                index + 1,
-                                                            )}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            <Button
-                                                variant="secondary"
-                                                size="sm"
-                                                onClick={handleAddCustomChannel}
-                                                leftIcon={<Plus size={14} />}
-                                            >
-                                                {t('settings.customChannel.add')}
-                                            </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={handleDeleteCustomChannel}
-                                                disabled={form.customProviders.length <= 1}
-                                                leftIcon={<Trash2 size={14} />}
-                                            >
-                                                {t('settings.customChannel.delete')}
-                                            </Button>
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-text-primary mb-2">
-                                            {t('settings.customChannel.name.label')}
-                                        </label>
-                                        <Input
-                                            type="text"
-                                            value={activeCustomChannel.name}
-                                            onChange={(e) =>
-                                                updateActiveCustomChannel({ name: e.target.value })
-                                            }
-                                            placeholder={t(
-                                                'settings.customChannel.name.placeholder',
+                                        <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                            {t(
+                                                'settings.apikey.provider_label',
+                                                t(PROVIDER_LABEL_KEYS[activeBuiltInProvider]),
                                             )}
-                                            className="bg-bg-tertiary"
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-text-primary mb-2">
-                                            {t('settings.apiFormat.label')}
                                         </label>
-                                        <select
-                                            value={activeCustomChannel.apiFormat}
-                                            onChange={(e) =>
-                                                updateActiveCustomChannel({
-                                                    apiFormat: e.target.value as ApiFormat,
-                                                })
-                                            }
-                                            className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
-                                        >
-                                            <option value="openai">
-                                                {t('settings.apiFormat.openai')}
-                                            </option>
-                                            <option value="anthropic">
-                                                {t('settings.apiFormat.anthropic')}
-                                            </option>
-                                        </select>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-text-primary mb-2">
-                                            {t('settings.customUrl.label')}
-                                        </label>
-                                        <Input
-                                            type="text"
-                                            value={activeCustomChannel.baseUrl}
-                                            onChange={(e) =>
-                                                updateActiveCustomChannel({
-                                                    baseUrl: e.target.value,
-                                                })
-                                            }
-                                            placeholder={t('settings.customUrl.placeholder')}
-                                            className="bg-bg-tertiary"
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-sm font-medium text-text-primary mb-2">
-                                            {t('settings.customKey.label')}
-                                        </label>
-                                        <div className="flex gap-2 items-center">
+                                        <div className="flex gap-1.5 items-center">
                                             <div className="flex-1 min-w-0">
                                                 <Input
                                                     type={showApiKey ? 'text' : 'password'}
-                                                    value={activeCustomChannel.apiKey}
+                                                    value={activeBuiltInConfig.apiKey}
                                                     onChange={(e) =>
-                                                        updateActiveCustomChannel({
+                                                        updateBuiltInField(activeBuiltInProvider, {
                                                             apiKey: e.target.value,
                                                         })
                                                     }
-                                                    placeholder={t(
-                                                        'settings.customKey.placeholder',
-                                                    )}
-                                                    className="bg-bg-tertiary"
+                                                    placeholder={t('settings.apikey.placeholder')}
+                                                    className="font-mono"
                                                 />
                                             </div>
                                             <Button
-                                                variant="ghost"
+                                                type="button"
+                                                variant="secondary"
+                                                size="sm"
                                                 onClick={() => setShowApiKey(!showApiKey)}
                                             >
                                                 {showApiKey
@@ -666,167 +572,412 @@ export const Settings: React.FC<SettingsProps> = ({ onNavigateBack }) => {
                                                     : t('settings.show')}
                                             </Button>
                                         </div>
+                                        <p className="text-[11px] text-text-muted mt-1.5">
+                                            {t('settings.apikey.help')}
+                                        </p>
                                     </div>
 
                                     <div>
-                                        <label className="block text-sm font-medium text-text-primary mb-2">
+                                        <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                            {t('settings.modelPreset.label')}
+                                        </label>
+                                        <select
+                                            value={selectedModelPreset}
+                                            onChange={(e) => {
+                                                const nextModel =
+                                                    e.target.value === CUSTOM_MODEL_OPTION_VALUE
+                                                        ? isBuiltInModelForProvider(
+                                                              activeBuiltInProvider,
+                                                              activeBuiltInConfig.modelName.trim(),
+                                                          )
+                                                            ? ''
+                                                            : activeBuiltInConfig.modelName
+                                                        : e.target.value;
+                                                updateBuiltInField(activeBuiltInProvider, {
+                                                    modelName: nextModel,
+                                                });
+                                            }}
+                                            className="w-full h-8 px-3 py-1 text-xs bg-bg-primary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:border-accent transition-colors"
+                                        >
+                                            {activeProviderModelOptions.map((option) => (
+                                                <option key={option} value={option}>
+                                                    {option}
+                                                </option>
+                                            ))}
+                                            <option value={CUSTOM_MODEL_OPTION_VALUE}>
+                                                {t('settings.modelPreset.custom')}
+                                            </option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-[11px] font-semibold text-text-secondary mb-1">
                                             {t('settings.modelName.label')}
                                         </label>
                                         <Input
                                             type="text"
-                                            value={activeCustomChannel.modelName}
+                                            value={activeBuiltInConfig.modelName}
                                             onChange={(e) =>
-                                                updateActiveCustomChannel({
+                                                updateBuiltInField(activeBuiltInProvider, {
                                                     modelName: e.target.value,
                                                 })
                                             }
-                                            placeholder={t('settings.modelName.placeholder')}
-                                            className="bg-bg-tertiary"
+                                            placeholder={activeBuiltInDef.defaultModel}
+                                            className="font-mono"
                                         />
+                                        <p className="text-[11px] text-text-muted mt-1.5">
+                                            {t('settings.modelName.help')}
+                                        </p>
                                     </div>
                                 </>
-                            )
-                        )}
+                            ) : (
+                                activeCustomChannel && (
+                                    <>
+                                        {/* Saved Custom Channels Pill Pool */}
+                                        <div>
+                                            <div className="flex items-center justify-between gap-2 mb-1.5">
+                                                <label className="text-[11px] font-semibold text-text-secondary">
+                                                    {t('settings.customChannel.label')}
+                                                </label>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleAddCustomChannel}
+                                                        className="inline-flex items-center gap-0.5 text-[11px] font-bold text-accent hover:underline"
+                                                    >
+                                                        <Plus size={12} strokeWidth={2.5} />
+                                                        <span>
+                                                            {t('settings.customChannel.add')}
+                                                        </span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleDeleteCustomChannel}
+                                                        disabled={form.customProviders.length <= 1}
+                                                        className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-text-muted hover:text-[#f4212e] disabled:opacity-35 disabled:cursor-not-allowed"
+                                                        title={t('settings.customChannel.delete')}
+                                                        aria-label={t(
+                                                            'settings.customChannel.delete',
+                                                        )}
+                                                    >
+                                                        <Trash2 size={12} />
+                                                    </button>
+                                                </div>
+                                            </div>
 
-                        {saveError && (
-                            <p className="text-sm text-red-500" role="alert">
-                                {saveError}
-                            </p>
-                        )}
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {form.customProviders.map((channel, index) => {
+                                                    const isCurrent =
+                                                        channel.id === activeCustomChannel.id;
+                                                    return (
+                                                        <button
+                                                            key={channel.id}
+                                                            type="button"
+                                                            onClick={() =>
+                                                                handleSelectCustomChannel(
+                                                                    channel.id,
+                                                                )
+                                                            }
+                                                            className={`h-7 px-2.5 rounded-full text-[11px] border transition-colors truncate max-w-[160px] ${
+                                                                isCurrent
+                                                                    ? 'bg-cta-bg text-cta-text border-cta-bg font-bold'
+                                                                    : 'bg-bg-primary border-border-primary text-text-secondary hover:text-text-primary hover:border-border-secondary font-semibold'
+                                                            }`}
+                                                        >
+                                                            {channel.name.trim() ||
+                                                                t(
+                                                                    'settings.customChannel.default_name',
+                                                                    index + 1,
+                                                                )}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
 
-                        <div className="flex justify-end pt-2">
-                            <Button onClick={handleSaveSettings} isLoading={isSaving}>
-                                {t('settings.save')}
-                            </Button>
-                        </div>
-                    </div>
-                </section>
+                                        <div className="grid grid-cols-1 min-[340px]:grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                                    {t('settings.customChannel.name.label')}
+                                                </label>
+                                                <Input
+                                                    type="text"
+                                                    value={activeCustomChannel.name}
+                                                    onChange={(e) =>
+                                                        updateActiveCustomChannel({
+                                                            name: e.target.value,
+                                                        })
+                                                    }
+                                                    placeholder={t(
+                                                        'settings.customChannel.name.placeholder',
+                                                    )}
+                                                />
+                                            </div>
 
-                {/* Default Preferences */}
-                <section className="mb-8">
-                    <div className="flex items-center gap-2 mb-4">
-                        <Globe size={20} className="text-accent" />
-                        <h2 className="text-lg font-semibold text-text-primary">
-                            {t('settings.defaults.title')}
-                        </h2>
-                    </div>
+                                            <div>
+                                                <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                                    {t('settings.apiFormat.label')}
+                                                </label>
+                                                <div className="grid grid-cols-2 gap-1 h-8">
+                                                    {(
+                                                        [
+                                                            { id: 'openai', label: 'OpenAI' },
+                                                            { id: 'anthropic', label: 'Anthropic' },
+                                                        ] as { id: ApiFormat; label: string }[]
+                                                    ).map((fmt) => {
+                                                        const activeFmt =
+                                                            activeCustomChannel.apiFormat ===
+                                                            fmt.id;
+                                                        return (
+                                                            <button
+                                                                key={fmt.id}
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    updateActiveCustomChannel({
+                                                                        apiFormat: fmt.id,
+                                                                    })
+                                                                }
+                                                                className={`rounded-full text-[11px] border transition-colors flex items-center justify-center ${
+                                                                    activeFmt
+                                                                        ? 'bg-cta-bg text-cta-text border-cta-bg font-bold'
+                                                                        : 'bg-bg-primary border-border-primary text-text-secondary hover:text-text-primary font-semibold'
+                                                                }`}
+                                                                title={
+                                                                    fmt.id === 'openai'
+                                                                        ? t(
+                                                                              'settings.apiFormat.openai',
+                                                                          )
+                                                                        : t(
+                                                                              'settings.apiFormat.anthropic',
+                                                                          )
+                                                                }
+                                                            >
+                                                                {fmt.label}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        </div>
 
-                    <div className="space-y-4 bg-bg-secondary rounded-xl p-4 border border-border-primary">
-                        <div>
-                            <label className="block text-sm font-medium text-text-primary mb-2">
-                                {t('settings.language.label')}
-                            </label>
-                            <select
-                                value={uiLanguage}
-                                onChange={(e) => {
-                                    void setUiLanguage(e.target.value as 'en' | 'zh').catch(
-                                        (err) => {
-                                            console.error('Failed to save UI language:', err);
-                                        },
-                                    );
-                                }}
-                                className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
-                            >
-                                <option value="en">English</option>
-                                <option value="zh">中文</option>
-                            </select>
-                        </div>
+                                        <div>
+                                            <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                                {t('settings.customUrl.label')}
+                                            </label>
+                                            <Input
+                                                type="text"
+                                                value={activeCustomChannel.baseUrl}
+                                                onChange={(e) =>
+                                                    updateActiveCustomChannel({
+                                                        baseUrl: e.target.value,
+                                                    })
+                                                }
+                                                placeholder={t('settings.customUrl.placeholder')}
+                                                className="font-mono"
+                                            />
+                                        </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-text-primary mb-2">
-                                {t('settings.translation.label')}
-                            </label>
-                            <select
-                                value={defaultLanguage}
-                                onChange={(e) => {
-                                    void setDefaultLanguage(e.target.value as Language).catch(
-                                        (err) => {
-                                            console.error('Failed to save default language:', err);
-                                        },
-                                    );
-                                }}
-                                className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
-                            >
-                                {Object.entries(LANGUAGE_NAMES).map(([code, name]) => (
-                                    <option key={code} value={code}>
-                                        {name}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
+                                        <div>
+                                            <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                                {t('settings.customKey.label')}
+                                            </label>
+                                            <div className="flex gap-1.5 items-center">
+                                                <div className="flex-1 min-w-0">
+                                                    <Input
+                                                        type={showApiKey ? 'text' : 'password'}
+                                                        value={activeCustomChannel.apiKey}
+                                                        onChange={(e) =>
+                                                            updateActiveCustomChannel({
+                                                                apiKey: e.target.value,
+                                                            })
+                                                        }
+                                                        placeholder={t(
+                                                            'settings.customKey.placeholder',
+                                                        )}
+                                                        className="font-mono"
+                                                    />
+                                                </div>
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    size="sm"
+                                                    onClick={() => setShowApiKey(!showApiKey)}
+                                                >
+                                                    {showApiKey
+                                                        ? t('settings.hide')
+                                                        : t('settings.show')}
+                                                </Button>
+                                            </div>
+                                        </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-text-primary mb-2">
-                                {t('settings.template.label')}
-                            </label>
-                            <select
-                                value={defaultPolishTemplate}
-                                onChange={(e) => {
-                                    void setDefaultPolishTemplate(e.target.value).catch((err) => {
-                                        console.error('Failed to save default template:', err);
-                                    });
-                                }}
-                                className="w-full px-4 py-2 bg-bg-tertiary border border-border-primary rounded-lg text-text-primary"
-                            >
-                                {promptOptions.map((prompt) => (
-                                    <option key={prompt.id} value={prompt.id}>
-                                        {prompt.name}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                    </div>
-                </section>
+                                        <div>
+                                            <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                                {t('settings.modelName.label')}
+                                            </label>
+                                            <Input
+                                                type="text"
+                                                value={activeCustomChannel.modelName}
+                                                onChange={(e) =>
+                                                    updateActiveCustomChannel({
+                                                        modelName: e.target.value,
+                                                    })
+                                                }
+                                                placeholder={t('settings.modelName.placeholder')}
+                                                className="font-mono"
+                                            />
+                                        </div>
+                                    </>
+                                )
+                            )}
 
-                {/* Appearance */}
-                <section className="mb-8">
-                    <div className="flex items-center gap-2 mb-4">
-                        <Palette size={20} className="text-accent" />
-                        <h2 className="text-lg font-semibold text-text-primary">
-                            {t('settings.appearance.title')}
-                        </h2>
-                    </div>
+                            {saveError && (
+                                <p className="text-xs text-[#f4212e]" role="alert">
+                                    {saveError}
+                                </p>
+                            )}
 
-                    <div className="space-y-4 bg-bg-secondary rounded-xl p-4 border border-border-primary">
-                        <div>
-                            <label className="block text-sm font-medium text-text-primary mb-2">
-                                {t('settings.theme.label')}
-                            </label>
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={() => setTheme('light')}
-                                    className={`flex-1 py-3 rounded-lg border flex items-center justify-center gap-2 ${
-                                        theme === 'light'
-                                            ? 'border-accent bg-accent/10 text-text-primary'
-                                            : 'border-border-primary text-text-muted hover:border-text-muted'
-                                    }`}
-                                >
-                                    <span>☀️</span> {t('settings.theme.light')}
-                                </button>
-                                <button
-                                    onClick={() => setTheme('dark')}
-                                    className={`flex-1 py-3 rounded-lg border flex items-center justify-center gap-2 ${
-                                        theme === 'dark'
-                                            ? 'border-accent bg-accent/10 text-text-primary'
-                                            : 'border-border-primary text-text-muted hover:border-text-muted'
-                                    }`}
-                                >
-                                    <span>🌙</span> {t('settings.theme.dark')}
-                                </button>
-                                <button
-                                    onClick={() => setTheme('system')}
-                                    className={`flex-1 py-3 rounded-lg border flex items-center justify-center gap-2 ${
-                                        theme === 'system'
-                                            ? 'border-accent bg-accent/10 text-text-primary'
-                                            : 'border-border-primary text-text-muted hover:border-text-muted'
-                                    }`}
-                                >
-                                    <Laptop size={16} /> {t('settings.theme.system')}
-                                </button>
+                            <div className="flex justify-end pt-1">
+                                <Button size="sm" onClick={handleSaveSettings} isLoading={isSaving}>
+                                    {t('settings.save')}
+                                </Button>
                             </div>
                         </div>
-                    </div>
-                </section>
+                    </section>
+
+                    {/* Default Preferences */}
+                    <section>
+                        <div className="flex items-center gap-1.5 mb-2 px-0.5">
+                            <Globe size={13} className="text-accent" />
+                            <h2 className="text-[11.5px] font-bold text-text-secondary">
+                                {t('settings.defaults.title')}
+                            </h2>
+                        </div>
+
+                        <div className="space-y-3 bg-bg-secondary rounded-xl p-3 border border-border-primary">
+                            <div>
+                                <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                    {t('settings.language.label')}
+                                </label>
+                                <select
+                                    value={uiLanguage}
+                                    onChange={(e) => {
+                                        void setUiLanguage(e.target.value as 'en' | 'zh').catch(
+                                            (err) => {
+                                                console.error('Failed to save UI language:', err);
+                                            },
+                                        );
+                                    }}
+                                    className="w-full h-8 px-3 py-1 text-xs bg-bg-primary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:border-accent transition-colors"
+                                >
+                                    <option value="en">English</option>
+                                    <option value="zh">中文</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                    {t('settings.translation.label')}
+                                </label>
+                                <select
+                                    value={defaultLanguage}
+                                    onChange={(e) => {
+                                        void setDefaultLanguage(e.target.value as Language).catch(
+                                            (err) => {
+                                                console.error(
+                                                    'Failed to save default language:',
+                                                    err,
+                                                );
+                                            },
+                                        );
+                                    }}
+                                    className="w-full h-8 px-3 py-1 text-xs bg-bg-primary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:border-accent transition-colors"
+                                >
+                                    {Object.entries(LANGUAGE_NAMES).map(([code, name]) => (
+                                        <option key={code} value={code}>
+                                            {name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-semibold text-text-secondary mb-1">
+                                    {t('settings.template.label')}
+                                </label>
+                                <select
+                                    value={defaultPolishTemplate}
+                                    onChange={(e) => {
+                                        void setDefaultPolishTemplate(e.target.value).catch(
+                                            (err) => {
+                                                console.error(
+                                                    'Failed to save default template:',
+                                                    err,
+                                                );
+                                            },
+                                        );
+                                    }}
+                                    className="w-full h-8 px-3 py-1 text-xs bg-bg-primary border border-border-primary rounded-lg text-text-primary focus:outline-none focus:border-accent transition-colors"
+                                >
+                                    {promptOptions.map((prompt) => (
+                                        <option key={prompt.id} value={prompt.id}>
+                                            {prompt.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Appearance */}
+                    <section>
+                        <div className="flex items-center gap-1.5 mb-2 px-0.5">
+                            <Palette size={13} className="text-accent" />
+                            <h2 className="text-[11.5px] font-bold text-text-secondary">
+                                {t('settings.appearance.title')}
+                            </h2>
+                        </div>
+
+                        <div className="space-y-3 bg-bg-secondary rounded-xl p-3 border border-border-primary">
+                            <div>
+                                <label className="block text-[11px] font-semibold text-text-secondary mb-1.5">
+                                    {t('settings.theme.label')}
+                                </label>
+                                <div className="grid grid-cols-3 gap-1.5">
+                                    <button
+                                        onClick={() => setTheme('light')}
+                                        className={`h-8 px-2 rounded-full border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                                            theme === 'light'
+                                                ? 'border-accent bg-accent/10 text-text-primary'
+                                                : 'border-border-primary bg-bg-primary text-text-muted hover:text-text-primary hover:border-border-secondary'
+                                        }`}
+                                    >
+                                        <Sun size={13} /> {t('settings.theme.light')}
+                                    </button>
+                                    <button
+                                        onClick={() => setTheme('dark')}
+                                        className={`h-8 px-2 rounded-full border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                                            theme === 'dark'
+                                                ? 'border-accent bg-accent/10 text-text-primary'
+                                                : 'border-border-primary bg-bg-primary text-text-muted hover:text-text-primary hover:border-border-secondary'
+                                        }`}
+                                    >
+                                        <Moon size={13} /> {t('settings.theme.dark')}
+                                    </button>
+                                    <button
+                                        onClick={() => setTheme('system')}
+                                        className={`h-8 px-2 rounded-full border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                                            theme === 'system'
+                                                ? 'border-accent bg-accent/10 text-text-primary'
+                                                : 'border-border-primary bg-bg-primary text-text-muted hover:text-text-primary hover:border-border-secondary'
+                                        }`}
+                                    >
+                                        <Laptop size={13} /> {t('settings.theme.system')}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
             </div>
         </div>
     );

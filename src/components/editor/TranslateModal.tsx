@@ -78,44 +78,44 @@ export const TranslateModal: React.FC<TranslateModalProps> = ({
 
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={t('editor.translate.title')} size="sm">
-            <div className="space-y-6">
+            <div className="space-y-4">
                 {hasSelectedVariant && (
                     <div>
-                        <label className="block text-sm font-medium text-text-primary mb-2">
+                        <label className="block text-xs font-semibold text-text-secondary mb-2">
                             {t('editor.translate.source')}
                         </label>
                         <div className="grid grid-cols-2 gap-2">
                             <button
                                 onClick={() => setSourceMode('source')}
                                 className={`
-                  p-3 rounded-lg border text-center transition-all flex flex-col items-center
+                  p-2.5 rounded-xl border text-center transition-colors flex flex-col items-center
                   ${
                       sourceMode === 'source'
-                          ? 'border-accent bg-accent/10'
-                          : 'border-border-primary bg-bg-tertiary hover:border-text-muted'
+                          ? 'border-accent bg-accent/[0.08]'
+                          : 'border-border-primary bg-bg-secondary hover:border-border-secondary'
                   }
                 `}
                             >
-                                <span className="text-sm text-text-primary">
+                                <span className="text-xs font-semibold text-text-primary">
                                     {t('editor.translate.source.source')}
                                 </span>
                             </button>
                             <button
                                 onClick={() => setSourceMode('selected')}
                                 className={`
-                  p-3 rounded-lg border text-center transition-all flex flex-col items-center
+                  p-2.5 rounded-xl border text-center transition-colors flex flex-col items-center
                   ${
                       sourceMode === 'selected'
-                          ? 'border-accent bg-accent/10'
-                          : 'border-border-primary bg-bg-tertiary hover:border-text-muted'
+                          ? 'border-accent bg-accent/[0.08]'
+                          : 'border-border-primary bg-bg-secondary hover:border-border-secondary'
                   }
                 `}
                             >
-                                <span className="text-sm text-text-primary">
+                                <span className="text-xs font-semibold text-text-primary">
                                     {t('editor.translate.source.selected')}
                                 </span>
                                 {selectedVariantLabel && (
-                                    <span className="text-xs text-text-muted mt-1">
+                                    <span className="text-[11px] text-text-muted mt-0.5">
                                         {selectedVariantLabel}
                                     </span>
                                 )}
@@ -126,10 +126,10 @@ export const TranslateModal: React.FC<TranslateModalProps> = ({
 
                 {/* Target language */}
                 <div>
-                    <label className="block text-sm font-medium text-text-primary mb-2">
+                    <label className="block text-xs font-semibold text-text-secondary mb-1">
                         {t('editor.translate.to')}
                     </label>
-                    <p className="text-xs text-text-muted mb-3">
+                    <p className="text-[11px] text-text-muted mb-2.5">
                         {t('editor.translate.auto_detect')} · {t('editor.translate.multi_select')}
                     </p>
                     <div className="grid grid-cols-3 gap-2">
@@ -138,16 +138,16 @@ export const TranslateModal: React.FC<TranslateModalProps> = ({
                                 key={`target-${lang}`}
                                 onClick={() => toggleTarget(lang)}
                                 className={`
-                  p-3 rounded-lg border text-center transition-all
+                  p-2.5 rounded-xl border text-center transition-colors
                   ${
                       selectedTargets.includes(lang)
-                          ? 'border-accent bg-accent/10'
-                          : 'border-border-primary bg-bg-tertiary hover:border-text-muted'
+                          ? 'border-accent bg-accent/[0.08]'
+                          : 'border-border-primary bg-bg-secondary hover:border-border-secondary'
                   }
                 `}
                             >
-                                <span className="text-lg">{languageFlags[lang]}</span>
-                                <p className="text-xs text-text-primary mt-1">
+                                <span className="text-base">{languageFlags[lang]}</span>
+                                <p className="text-[11px] font-semibold text-text-primary mt-1">
                                     {LANGUAGE_NAMES[lang]}
                                 </p>
                             </button>
@@ -156,17 +156,17 @@ export const TranslateModal: React.FC<TranslateModalProps> = ({
                 </div>
 
                 {progress && progress.total > 0 && (
-                    <div className="space-y-2">
-                        <div className="flex items-center justify-between text-xs text-text-muted">
+                    <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px] text-text-muted">
                             <span>
                                 {t('editor.translate.progress')}
                                 {progress.currentLabel ? ` · ${progress.currentLabel}` : ''}
                             </span>
-                            <span>
+                            <span className="tabular-nums">
                                 {progress.completed}/{progress.total}
                             </span>
                         </div>
-                        <div className="h-2 w-full rounded-full bg-bg-tertiary overflow-hidden">
+                        <div className="h-1.5 w-full rounded-full bg-bg-tertiary overflow-hidden">
                             <div
                                 className="h-full bg-accent transition-all"
                                 style={{
@@ -178,14 +178,15 @@ export const TranslateModal: React.FC<TranslateModalProps> = ({
                 )}
 
                 {/* Actions */}
-                <div className="flex justify-end gap-3 pt-4 border-t border-border-primary">
-                    <Button variant="ghost" onClick={onClose}>
+                <div className="flex justify-end gap-2 pt-3 border-t border-border-primary">
+                    <Button variant="ghost" size="sm" onClick={onClose}>
                         {t('editor.translate.cancel')}
                     </Button>
                     <Button
+                        size="sm"
                         onClick={handleTranslate}
                         isLoading={isLoading}
-                        leftIcon={<Languages size={16} />}
+                        leftIcon={<Languages size={14} />}
                         disabled={selectedTargets.length === 0}
                     >
                         {selectedTargets.length > 1

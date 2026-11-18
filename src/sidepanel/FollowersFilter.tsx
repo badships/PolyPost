@@ -1,9 +1,18 @@
 import React, { useState } from 'react';
-import { Button, Card, Input } from '@/components/ui';
+import { Button, Card } from '@/components/ui';
 import { useTranslation } from '@/hooks/useTranslation';
 import { ensureHostPermission } from '@/services/permissions';
 import { getWebExt } from '@/services/webext';
-import { ExternalLink, Wand2 } from 'lucide-react';
+import {
+    UserMinus,
+    UserPlus,
+    BadgeCheck,
+    RefreshCw,
+    ExternalLink,
+    Power,
+    PowerOff,
+    AtSign,
+} from 'lucide-react';
 
 type ListType = 'followers' | 'verified_followers' | 'following';
 type PanelCopy = {
@@ -141,76 +150,160 @@ export const FollowersFilter: React.FC = () => {
         }
     };
 
-    return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold text-text-primary">
-                    {t('followers_filter.title')}
-                </h1>
-                <p className="text-text-muted mt-1">{t('followers_filter.subtitle')}</p>
-            </div>
+    const capabilities = [
+        {
+            icon: <UserMinus size={13} className="text-accent shrink-0" />,
+            title: t('followers_filter.cap.unfollowed'),
+            sub: t('followers_filter.cap.unfollowed.sub'),
+        },
+        {
+            icon: <UserPlus size={13} className="text-accent shrink-0" />,
+            title: t('followers_filter.cap.fans'),
+            sub: t('followers_filter.cap.fans.sub'),
+        },
+        {
+            icon: <BadgeCheck size={13} className="text-accent shrink-0" />,
+            title: t('followers_filter.cap.verified'),
+            sub: t('followers_filter.cap.verified.sub'),
+        },
+        {
+            icon: <RefreshCw size={13} className="text-accent shrink-0" />,
+            title: t('followers_filter.cap.auto'),
+            sub: t('followers_filter.cap.auto.sub'),
+        },
+    ];
 
+    const hasHandle = Boolean(sanitizeHandleInput(handleInput));
+
+    return (
+        <div className="space-y-2.5 pb-4">
             {error && (
-                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+                <div className="px-3 py-2 bg-[#f4212e]/10 border border-[#f4212e]/30 rounded-xl text-[#f4212e] text-xs">
                     {error}
                 </div>
             )}
 
             {status && (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400 text-sm">
+                <div className="px-3 py-2 bg-status-posted/10 border border-status-posted/30 rounded-xl text-status-posted text-xs">
                     {status}
                 </div>
             )}
 
-            <Card className="p-4 space-y-4">
-                <Input
-                    label={t('followers_filter.handle.label')}
-                    placeholder={t('followers_filter.handle.placeholder')}
-                    value={handleInput}
-                    onChange={(event) => setHandleInput(event.target.value)}
-                />
-                <div className="flex flex-wrap gap-2">
+            {/* Card 1: What It Does & 1-Click Toolbar Activation */}
+            <Card className="p-3 space-y-2.5 rounded-xl">
+                <div className="space-y-1">
+                    <h2 className="text-[12.5px] font-bold text-text-primary">
+                        {t('followers_filter.hero.title')}
+                    </h2>
+                    <p className="text-[11px] text-text-secondary leading-relaxed">
+                        {t('followers_filter.hero.desc')}
+                    </p>
+                </div>
+
+                {/* 4 Visual Capability Chips */}
+                <div className="grid grid-cols-2 gap-1.5">
+                    {capabilities.map((cap) => (
+                        <div
+                            key={cap.title}
+                            className="p-2 rounded-lg bg-bg-primary border border-border-primary flex items-start gap-2 min-w-0"
+                        >
+                            <div className="mt-0.5">{cap.icon}</div>
+                            <div className="min-w-0">
+                                <div className="text-[11px] font-bold text-text-primary truncate">
+                                    {cap.title}
+                                </div>
+                                <div className="text-[10px] text-text-muted truncate">
+                                    {cap.sub}
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Primary Controls */}
+                <div className="flex items-center gap-2 pt-0.5">
                     <Button
-                        variant="secondary"
-                        onClick={() => void openListPage('followers')}
-                        disabled={!sanitizeHandleInput(handleInput)}
+                        size="md"
+                        variant="accent"
+                        className="flex-1"
+                        leftIcon={<Power size={13} />}
+                        onClick={() => void runScript('inject')}
+                        isLoading={isWorking}
                     >
-                        {t('followers_filter.open.followers')}
+                        {t('followers_filter.inject')}
                     </Button>
                     <Button
+                        size="md"
                         variant="secondary"
-                        onClick={() => void openListPage('verified_followers')}
-                        disabled={!sanitizeHandleInput(handleInput)}
+                        leftIcon={<PowerOff size={13} />}
+                        onClick={() => void runScript('remove')}
+                        disabled={isWorking}
                     >
-                        {t('followers_filter.open.verified_followers')}
-                    </Button>
-                    <Button
-                        variant="secondary"
-                        onClick={() => void openListPage('following')}
-                        disabled={!sanitizeHandleInput(handleInput)}
-                    >
-                        {t('followers_filter.open.following')}
+                        {t('followers_filter.remove')}
                     </Button>
                 </div>
-                <p className="text-xs text-text-muted">{t('followers_filter.tip')}</p>
-            </Card>
 
-            <Card className="p-4 space-y-3">
-                <Button onClick={() => void runScript('inject')} isLoading={isWorking}>
-                    <Wand2 size={16} className="mr-2" />
-                    {t('followers_filter.inject')}
-                </Button>
-                <Button
-                    variant="ghost"
-                    onClick={() => void runScript('remove')}
-                    disabled={isWorking}
-                >
-                    {t('followers_filter.remove')}
-                </Button>
-                <div className="flex items-center gap-2 text-xs text-text-muted">
-                    <ExternalLink size={14} />
+                <div className="flex items-center gap-1.5 text-[10.5px] text-text-muted">
+                    <ExternalLink size={11} className="shrink-0" />
                     <span>{t('followers_filter.tip_link')}</span>
                 </div>
+            </Card>
+
+            {/* Card 2: Quick Jump Helper */}
+            <Card className="p-3 space-y-2 rounded-xl">
+                <div className="space-y-0.5">
+                    <h3 className="text-[12px] font-bold text-text-primary">
+                        {t('followers_filter.jump.title')}
+                    </h3>
+                    <p className="text-[11px] text-text-muted leading-relaxed">
+                        {t('followers_filter.jump.desc')}
+                    </p>
+                </div>
+
+                <div className="relative">
+                    <AtSign
+                        size={13}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
+                    />
+                    <input
+                        type="text"
+                        value={handleInput}
+                        onChange={(event) => setHandleInput(event.target.value)}
+                        placeholder={t('followers_filter.handle.placeholder')}
+                        className="w-full h-8 pl-8 pr-3 bg-bg-primary border border-border-primary rounded-lg text-xs text-text-primary placeholder-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+                    />
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                    <button
+                        type="button"
+                        onClick={() => void openListPage('following')}
+                        disabled={!hasHandle}
+                        className="h-7 px-2.5 rounded-full text-[11px] font-semibold bg-bg-primary border border-border-primary text-text-primary hover:border-border-secondary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        {t('followers_filter.open.following')}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void openListPage('followers')}
+                        disabled={!hasHandle}
+                        className="h-7 px-2.5 rounded-full text-[11px] font-semibold bg-bg-primary border border-border-primary text-text-primary hover:border-border-secondary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        {t('followers_filter.open.followers')}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void openListPage('verified_followers')}
+                        disabled={!hasHandle}
+                        className="h-7 px-2.5 rounded-full text-[11px] font-semibold bg-bg-primary border border-border-primary text-text-primary hover:border-border-secondary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        {t('followers_filter.open.verified_followers')}
+                    </button>
+                </div>
+
+                <p className="text-[10.5px] text-text-muted leading-relaxed">
+                    {t('followers_filter.tip')}
+                </p>
             </Card>
         </div>
     );

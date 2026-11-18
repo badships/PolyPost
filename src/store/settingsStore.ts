@@ -8,6 +8,7 @@ import {
     normalizeModelNameForProvider,
 } from '@/services/models';
 import { getWebExt } from '@/services/webext';
+import { applyThemeToDocument } from '@/utils';
 
 interface SettingsState extends Settings {
     isLoading: boolean;
@@ -54,6 +55,7 @@ const fieldMutationSeq = new Map<keyof Settings, number>();
 const committedValues = new Map<keyof Settings, unknown>();
 let mutationVersion = 0;
 let loadSeq = 0;
+let hasHydratedOnce = false;
 
 const assignSettingField = (
     target: Partial<Settings>,
@@ -165,7 +167,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         loadSettings: async () => {
             const currentLoadSeq = ++loadSeq;
             const startVersion = mutationVersion;
-            set({ isLoading: true });
+            if (!hasHydratedOnce) {
+                set({ isLoading: true });
+            }
             try {
                 const settings = await storage.getSettings();
                 if (currentLoadSeq !== loadSeq) {
@@ -193,6 +197,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                     }
                 }
 
+                hasHydratedOnce = true;
+                applyThemeToDocument(hydrated.theme);
                 set({ ...hydrated, isLoading: false });
             } catch (error) {
                 if (currentLoadSeq !== loadSeq) {
@@ -200,6 +206,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
                 }
                 console.error('Failed to load settings:', error);
                 const currentState = get();
+                hasHydratedOnce = true;
                 set({
                     prompts:
                         currentState.prompts.length > 0
@@ -343,6 +350,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
         },
 
         setTheme: async (theme: 'dark' | 'light' | 'system') => {
+            applyThemeToDocument(theme);
             try {
                 await applySettingsMutation(['theme'], { theme }, () =>
                     storage.updateSettings({ theme }),
