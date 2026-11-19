@@ -611,15 +611,25 @@ const localMutations = {
         return enqueueStorageOp(() => _savePosts(posts));
     },
 
-    async addPost(post: Post): Promise<void> {
+    async addPost(post: Post): Promise<Post> {
         return enqueueStorageOp(async () => {
-            const posts = await _getPosts();
-            const exists = posts.some((p) => p.id === post.id);
-            const nextPosts = exists
-                ? posts.map((p) => (p.id === post.id ? post : p))
-                : [...posts, post];
-            bumpLastPostUpdatedAt(post.updatedAt);
+            const [posts, folders] = await Promise.all([_getPosts(), _getFolders()]);
+            const validFolderId =
+                post.folderId !== null && folders.some((f) => f.id === post.folderId)
+                    ? post.folderId
+                    : null;
+            const existing = posts.find((p) => p.id === post.id);
+            const minFloor = Math.max(post.updatedAt - 1, existing?.updatedAt ?? 0);
+            const normalizedPost: Post = {
+                ...post,
+                folderId: validFolderId,
+                updatedAt: nextPostTimestamp(minFloor),
+            };
+            const nextPosts = existing
+                ? posts.map((p) => (p.id === post.id ? normalizedPost : p))
+                : [...posts, normalizedPost];
             await _savePosts(nextPosts);
+            return normalizedPost;
         });
     },
 
@@ -896,7 +906,7 @@ export const storage = {
         return runMutation('savePosts', [posts]);
     },
 
-    async addPost(post: Post): Promise<void> {
+    async addPost(post: Post): Promise<Post> {
         return runMutation('addPost', [post]);
     },
 

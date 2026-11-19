@@ -67,10 +67,22 @@ export const usePostsStore = create<PostsState>((set, get) => {
               }
             : localDraft;
 
-        const promotionPromise = storage.addPost(toPersist).then(() => {
+        const promotionPromise = storage.addPost(toPersist).then((savedPost) => {
             localBlankDraftIds.delete(id);
             set((state) => ({
-                posts: state.posts.map((p) => (p.id === id ? toPersist : p)),
+                posts: state.posts.map((p) => {
+                    if (p.id !== id) {
+                        return p;
+                    }
+                    if (p.updatedAt > savedPost.updatedAt) {
+                        return {
+                            ...savedPost,
+                            folderId: p.folderId === null ? null : savedPost.folderId,
+                            updatedAt: p.updatedAt,
+                        };
+                    }
+                    return savedPost;
+                }),
                 newlyCreatedDraft:
                     state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
             }));
@@ -139,21 +151,22 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 updatedAt: now,
             };
 
+            let persistedPost = post;
             if (isBlankDraft) {
                 // Keep new blank drafts local until the first save or variant creation
                 // so another panel cannot open or edit an uncommitted blank draft.
                 localBlankDraftIds.add(post.id);
             } else {
-                await storage.addPost(post);
+                persistedPost = await storage.addPost(post);
             }
 
             set((state) => ({
-                posts: [...state.posts, post],
+                posts: [...state.posts, persistedPost],
                 newlyCreatedDraft: isBlankDraft
-                    ? { id: post.id, updatedAt: post.updatedAt }
+                    ? { id: persistedPost.id, updatedAt: persistedPost.updatedAt }
                     : state.newlyCreatedDraft,
             }));
-            return post;
+            return persistedPost;
         },
 
         updatePost: async (id: string, updates: Partial<Post>) => {

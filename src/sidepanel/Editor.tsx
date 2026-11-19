@@ -47,6 +47,14 @@ const notifyMountedEditors = (postId: string): void => {
     }
 };
 
+const pruneSupersededQueuedSource = (postId: string, committedVersion: number): void => {
+    const queuedVersion = latestQueuedVersionByPost.get(postId);
+    if (queuedVersion !== undefined && queuedVersion <= committedVersion) {
+        latestQueuedVersionByPost.delete(postId);
+        latestQueuedContentByPost.delete(postId);
+    }
+};
+
 export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSettings }) => {
     const { t, getTemplateName } = useTranslation();
     const {
@@ -149,11 +157,12 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 (includePendingPublish && Boolean(pendingPublishByPost.get(targetPostId)));
 
             if (!needSource && !needPosted) {
-                if (checkSourceDirty && !isStaleSourceVersion && versionAtCall !== undefined) {
-                    committedVersionByPost.set(
-                        targetPostId,
-                        Math.max(committedVersion, versionAtCall),
-                    );
+                if (isStaleSourceVersion) {
+                    pruneSupersededQueuedSource(targetPostId, committedVersion);
+                } else if (checkSourceDirty && versionAtCall !== undefined) {
+                    const nextCommittedVersion = Math.max(committedVersion, versionAtCall);
+                    committedVersionByPost.set(targetPostId, nextCommittedVersion);
+                    pruneSupersededQueuedSource(targetPostId, nextCommittedVersion);
                 }
                 if (
                     checkSourceDirty &&
@@ -176,11 +185,17 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             if (needSource) {
                 committedContentByPost.set(targetPostId, sourceContent);
                 if (versionAtCall !== undefined) {
-                    committedVersionByPost.set(
-                        targetPostId,
-                        Math.max(committedVersionByPost.get(targetPostId) ?? -1, versionAtCall),
+                    const nextCommittedVersion = Math.max(
+                        committedVersionByPost.get(targetPostId) ?? -1,
+                        versionAtCall,
                     );
+                    committedVersionByPost.set(targetPostId, nextCommittedVersion);
+                    pruneSupersededQueuedSource(targetPostId, nextCommittedVersion);
+                } else if (committedVersion >= 0) {
+                    pruneSupersededQueuedSource(targetPostId, committedVersion);
                 }
+            } else if (isStaleSourceVersion) {
+                pruneSupersededQueuedSource(targetPostId, committedVersion);
             }
             if (
                 needPosted &&
@@ -225,7 +240,13 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             const { targetPostId, sourceContent, checkSourceDirty = true, versionAtCall } = options;
 
             const queuedVersion = versionAtCall ?? sharedEditVersion;
-            if (checkSourceDirty) {
+            const committedVersion = committedVersionByPost.get(targetPostId) ?? -1;
+            const currentQueuedVersion = latestQueuedVersionByPost.get(targetPostId) ?? -1;
+            const trackedAsLatest =
+                checkSourceDirty &&
+                queuedVersion > committedVersion &&
+                queuedVersion >= currentQueuedVersion;
+            if (trackedAsLatest) {
                 latestQueuedContentByPost.set(targetPostId, sourceContent);
                 latestQueuedVersionByPost.set(targetPostId, queuedVersion);
             }
@@ -235,7 +256,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                     await executePostCommit(options);
                 } finally {
                     if (
-                        checkSourceDirty &&
+                        trackedAsLatest &&
                         latestQueuedVersionByPost.get(targetPostId) === queuedVersion
                     ) {
                         latestQueuedVersionByPost.delete(targetPostId);
@@ -292,14 +313,22 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             if (sharedInFlightSaveCount === 0 || !committedContentByPost.has(post.id)) {
                 committedContentByPost.set(post.id, post.sourceContent);
             }
-            const initialContent =
-                sharedInFlightSaveCount > 0 && latestQueuedContentByPost.has(post.id)
-                    ? latestQueuedContentByPost.get(post.id)!
-                    : post.sourceContent;
+            const queuedVersion = latestQueuedVersionByPost.get(post.id);
+            const committedVersion = committedVersionByPost.get(post.id) ?? -1;
+            const hasNewerQueuedSource =
+                sharedInFlightSaveCount > 0 &&
+                queuedVersion !== undefined &&
+                queuedVersion > committedVersion &&
+                latestQueuedContentByPost.has(post.id);
+            const initialContent = hasNewerQueuedSource
+                ? latestQueuedContentByPost.get(post.id)!
+                : post.sourceContent;
             const initialDirty = initialContent !== post.sourceContent;
-            sharedEditVersion += 1;
-            editVersionRef.current = sharedEditVersion;
-            mountEditVersionRef.current = sharedEditVersion;
+            const initialVersion = hasNewerQueuedSource
+                ? queuedVersion
+                : Math.max(committedVersion, sharedEditVersion);
+            editVersionRef.current = initialVersion;
+            mountEditVersionRef.current = initialVersion;
             contentRef.current = initialContent;
             hasUnsavedChangesRef.current = initialDirty;
             setContent(initialContent);

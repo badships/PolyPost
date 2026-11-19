@@ -53,13 +53,13 @@ const extractErrorTextInternal = (
     allowScalarError: boolean,
 ): string => {
     if (typeof value === 'string') {
-        return value;
+        return allowScalarError ? stripControlChars(value) : '';
     }
     if (value === null || value === undefined) {
         return '';
     }
     if (typeof value === 'number' || typeof value === 'boolean') {
-        return String(value);
+        return allowScalarError ? String(value) : '';
     }
     if (typeof value !== 'object' || seen.has(value) || depth >= MAX_ERROR_DEPTH) {
         return '';
@@ -101,7 +101,7 @@ const extractErrorTextInternal = (
                 typeof fieldValue === 'number' ||
                 typeof fieldValue === 'boolean'
             ) {
-                const text = String(fieldValue);
+                const text = stripControlChars(String(fieldValue));
                 if (text) {
                     return text;
                 }
@@ -121,8 +121,8 @@ const extractErrorTextInternal = (
                 return nestedScalarError;
             }
         }
-        if (value instanceof Error && typeof value.message === 'string' && value.message) {
-            return value.message;
+        if (value instanceof Error && typeof value.message === 'string') {
+            return stripControlChars(value.message);
         }
     }
 
@@ -131,7 +131,7 @@ const extractErrorTextInternal = (
 
 const extractKnownErrorText = (value: unknown): string => {
     if (typeof value === 'string') {
-        return value;
+        return stripControlChars(value);
     }
     if (value === null || value === undefined) {
         return '';
