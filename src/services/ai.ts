@@ -46,10 +46,11 @@ const stripControlChars = (value: string): string => {
     return result.trim();
 };
 
-const extractKnownErrorText = (
+const extractErrorTextInternal = (
     value: unknown,
-    depth = 0,
-    seen: Set<unknown> = new Set(),
+    depth: number,
+    seen: Set<unknown>,
+    allowScalarError: boolean,
 ): string => {
     if (typeof value === 'string') {
         return value;
@@ -68,7 +69,7 @@ const extractKnownErrorText = (
 
     if (Array.isArray(value)) {
         for (const item of value) {
-            const nested = extractKnownErrorText(item, depth + 1, seen);
+            const nested = extractErrorTextInternal(item, depth + 1, seen, allowScalarError);
             if (nested) {
                 return nested;
             }
@@ -78,7 +79,12 @@ const extractKnownErrorText = (
 
     const record = value as Record<string, unknown>;
     if (typeof record.error === 'object' && record.error !== null && record.error !== value) {
-        const nestedErrorObject = extractKnownErrorText(record.error, depth + 1, seen);
+        const nestedErrorObject = extractErrorTextInternal(
+            record.error,
+            depth + 1,
+            seen,
+            allowScalarError,
+        );
         if (nestedErrorObject) {
             return nestedErrorObject;
         }
@@ -88,26 +94,56 @@ const extractKnownErrorText = (
         if (value instanceof Error && key === 'message') {
             continue;
         }
-        if (record[key] !== undefined && record[key] !== value) {
-            const nested = extractKnownErrorText(record[key], depth + 1, seen);
+        const fieldValue = record[key];
+        if (fieldValue !== undefined && fieldValue !== value) {
+            if (
+                typeof fieldValue === 'string' ||
+                typeof fieldValue === 'number' ||
+                typeof fieldValue === 'boolean'
+            ) {
+                const text = String(fieldValue);
+                if (text) {
+                    return text;
+                }
+                continue;
+            }
+            const nested = extractErrorTextInternal(fieldValue, depth + 1, seen, allowScalarError);
             if (nested) {
                 return nested;
             }
         }
     }
 
-    if (record.error !== undefined && record.error !== value && typeof record.error !== 'object') {
-        const nestedScalarError = extractKnownErrorText(record.error, depth + 1, seen);
-        if (nestedScalarError) {
-            return nestedScalarError;
+    if (allowScalarError) {
+        if (record.error !== undefined && record.error !== value) {
+            const nestedScalarError = extractErrorTextInternal(record.error, depth + 1, seen, true);
+            if (nestedScalarError) {
+                return nestedScalarError;
+            }
+        }
+        if (value instanceof Error && typeof value.message === 'string' && value.message) {
+            return value.message;
         }
     }
 
-    if (value instanceof Error && typeof value.message === 'string' && value.message) {
-        return value.message;
-    }
-
     return '';
+};
+
+const extractKnownErrorText = (value: unknown): string => {
+    if (typeof value === 'string') {
+        return value;
+    }
+    if (value === null || value === undefined) {
+        return '';
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+        return String(value);
+    }
+    const descriptive = extractErrorTextInternal(value, 0, new Set(), false);
+    if (descriptive) {
+        return descriptive;
+    }
+    return extractErrorTextInternal(value, 0, new Set(), true);
 };
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

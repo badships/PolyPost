@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Post, PostStatus, LibraryFilter, Variant } from '@/types';
-import { storage } from '@/services/storage';
+import { storage, nextPostTimestamp } from '@/services/storage';
 import { generateId } from '@/utils';
 
 interface PostsState {
@@ -34,12 +34,9 @@ interface PostsState {
 
 const localBlankDraftIds = new Set<string>();
 const pendingLocalPromotions = new Map<string, Promise<void>>();
-let lastLocalPostTimestamp = 0;
 
 export const nextLocalPostTimestamp = (minFloor = 0): number => {
-    const next = Math.max(Date.now(), lastLocalPostTimestamp + 1, minFloor + 1);
-    lastLocalPostTimestamp = next;
-    return next;
+    return nextPostTimestamp(minFloor);
 };
 
 export const usePostsStore = create<PostsState>((set, get) => {

@@ -289,42 +289,41 @@ export const proxyFetch = async (
     );
 
     const requestId = createRequestId();
-    let rpcDispatched = false;
+    const body = await raceWithAbortAndDeadline(readBody(input, init), {
+        signal,
+        deadlineAt,
+        timeoutBufferMs: 0,
+    });
 
-    const sendPromise = (async (): Promise<ProxyFetchResponse> => {
-        const body = await readBody(input, init);
-        if (signal?.aborted) {
-            throw createAbortError();
-        }
-        if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
-            throw new Error('Request timed out');
-        }
-        rpcDispatched = true;
-        return sendRuntimeMessage<ProxyFetchResponse>({
-            type: 'proxyFetch',
-            requestId,
-            url,
-            init: {
-                method,
-                headers,
-                body,
-                ...(deadlineAt !== undefined ? { deadlineAt } : {}),
-            },
-        });
-    })();
+    if (signal?.aborted) {
+        throw createAbortError();
+    }
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+        throw new Error('Request timed out');
+    }
 
-    const cancelIfDispatched = () => {
-        if (rpcDispatched) {
-            sendProxyFetchCancel(requestId);
-        }
+    const rpcPromise = sendRuntimeMessage<ProxyFetchResponse>({
+        type: 'proxyFetch',
+        requestId,
+        url,
+        init: {
+            method,
+            headers,
+            body,
+            ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+        },
+    });
+
+    const cancelRpc = () => {
+        sendProxyFetchCancel(requestId);
     };
 
-    const response = await raceWithAbortAndDeadline(sendPromise, {
+    const response = await raceWithAbortAndDeadline(rpcPromise, {
         signal,
         deadlineAt,
         timeoutBufferMs: 250,
-        onAbort: cancelIfDispatched,
-        onTimeout: cancelIfDispatched,
+        onAbort: cancelRpc,
+        onTimeout: cancelRpc,
     });
 
     if (response?.aborted) {

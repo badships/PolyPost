@@ -74,11 +74,14 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
                 if (p.folderId !== id) {
                     return p;
                 }
-                const persistedUpdatedAt = storedUpdatedAtById.get(p.id) ?? 0;
+                const persistedUpdatedAt = storedUpdatedAtById.get(p.id);
                 return {
                     ...p,
                     folderId: null,
-                    updatedAt: Math.max(persistedUpdatedAt, nextLocalPostTimestamp(p.updatedAt)),
+                    updatedAt:
+                        persistedUpdatedAt !== undefined
+                            ? persistedUpdatedAt
+                            : nextLocalPostTimestamp(p.updatedAt),
                 };
             }),
         }));

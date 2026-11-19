@@ -34,10 +34,18 @@ let sharedSaveChain: Promise<void> = Promise.resolve();
 let sharedInFlightSaveCount = 0;
 let sharedEditVersion = 0;
 const committedContentByPost = new Map<string, string>();
+const committedVersionByPost = new Map<string, number>();
 const pendingPublishByPost = new Map<string, boolean>();
 const publishVersionByPost = new Map<string, number>();
 const latestQueuedContentByPost = new Map<string, string>();
 const latestQueuedVersionByPost = new Map<string, number>();
+const mountedEditorSyncListeners = new Set<(postId: string) => void>();
+
+const notifyMountedEditors = (postId: string): void => {
+    for (const listener of mountedEditorSyncListeners) {
+        listener(postId);
+    }
+};
 
 export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSettings }) => {
     const { t, getTemplateName } = useTranslation();
@@ -129,14 +137,24 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             } = options;
 
             const committed = committedContentByPost.get(targetPostId);
+            const committedVersion = committedVersionByPost.get(targetPostId) ?? -1;
+            const isStaleSourceVersion =
+                versionAtCall !== undefined && versionAtCall < committedVersion;
             const needSource =
                 checkSourceDirty &&
+                !isStaleSourceVersion &&
                 (forceSourceWrite || committed === undefined || sourceContent !== committed);
             const needPosted =
                 forceMarkPosted ||
                 (includePendingPublish && Boolean(pendingPublishByPost.get(targetPostId)));
 
             if (!needSource && !needPosted) {
+                if (checkSourceDirty && !isStaleSourceVersion && versionAtCall !== undefined) {
+                    committedVersionByPost.set(
+                        targetPostId,
+                        Math.max(committedVersion, versionAtCall),
+                    );
+                }
                 if (
                     checkSourceDirty &&
                     versionAtCall !== undefined &&
@@ -157,6 +175,12 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
 
             if (needSource) {
                 committedContentByPost.set(targetPostId, sourceContent);
+                if (versionAtCall !== undefined) {
+                    committedVersionByPost.set(
+                        targetPostId,
+                        Math.max(committedVersionByPost.get(targetPostId) ?? -1, versionAtCall),
+                    );
+                }
             }
             if (
                 needPosted &&
@@ -198,21 +222,10 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             publishVersionAtCall?: number;
             clearDraftRevision?: boolean;
         }) => {
-            const {
-                targetPostId,
-                sourceContent,
-                forceSourceWrite = false,
-                checkSourceDirty = true,
-                versionAtCall,
-            } = options;
+            const { targetPostId, sourceContent, checkSourceDirty = true, versionAtCall } = options;
 
             const queuedVersion = versionAtCall ?? sharedEditVersion;
-            const mayWriteSource =
-                checkSourceDirty &&
-                (forceSourceWrite ||
-                    !committedContentByPost.has(targetPostId) ||
-                    sourceContent !== committedContentByPost.get(targetPostId));
-            if (mayWriteSource) {
+            if (checkSourceDirty) {
                 latestQueuedContentByPost.set(targetPostId, sourceContent);
                 latestQueuedVersionByPost.set(targetPostId, queuedVersion);
             }
@@ -222,12 +235,13 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                     await executePostCommit(options);
                 } finally {
                     if (
-                        mayWriteSource &&
+                        checkSourceDirty &&
                         latestQueuedVersionByPost.get(targetPostId) === queuedVersion
                     ) {
                         latestQueuedVersionByPost.delete(targetPostId);
                         latestQueuedContentByPost.delete(targetPostId);
                     }
+                    notifyMountedEditors(targetPostId);
                 }
             });
         },
@@ -291,21 +305,64 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             setContent(initialContent);
             setHasUnsavedChanges(initialDirty);
             setHasPendingPublishStatus(Boolean(pendingPublishByPost.get(post.id)));
-        } else if (sharedInFlightSaveCount === 0) {
-            committedContentByPost.set(post.id, post.sourceContent);
-            if (!hasUnsavedChangesRef.current && post.sourceContent !== contentRef.current) {
-                contentRef.current = post.sourceContent;
-                setContent(post.sourceContent);
-            } else if (
-                hasUnsavedChangesRef.current &&
-                editVersionRef.current === mountEditVersionRef.current &&
-                post.sourceContent === contentRef.current
-            ) {
-                hasUnsavedChangesRef.current = false;
-                setHasUnsavedChanges(false);
+        } else {
+            setHasPendingPublishStatus(Boolean(pendingPublishByPost.get(post.id)));
+            if (sharedInFlightSaveCount === 0) {
+                committedContentByPost.set(post.id, post.sourceContent);
+                if (!hasUnsavedChangesRef.current && post.sourceContent !== contentRef.current) {
+                    contentRef.current = post.sourceContent;
+                    setContent(post.sourceContent);
+                } else if (
+                    hasUnsavedChangesRef.current &&
+                    editVersionRef.current === mountEditVersionRef.current &&
+                    post.sourceContent === contentRef.current
+                ) {
+                    hasUnsavedChangesRef.current = false;
+                    setHasUnsavedChanges(false);
+                }
             }
         }
     }, [post]);
+
+    useEffect(() => {
+        const handleSync = (syncedPostId: string) => {
+            if (loadedPostIdRef.current !== syncedPostId) {
+                return;
+            }
+            setHasPendingPublishStatus(Boolean(pendingPublishByPost.get(syncedPostId)));
+            if (latestQueuedVersionByPost.has(syncedPostId)) {
+                return;
+            }
+            const committed = committedContentByPost.get(syncedPostId);
+            const committedVer = committedVersionByPost.get(syncedPostId) ?? -1;
+            if (committed === undefined) {
+                return;
+            }
+            if (contentRef.current === committed) {
+                if (
+                    editVersionRef.current <= committedVer ||
+                    editVersionRef.current === mountEditVersionRef.current
+                ) {
+                    hasUnsavedChangesRef.current = false;
+                    setHasUnsavedChanges(false);
+                }
+            } else if (
+                !hasUnsavedChangesRef.current &&
+                editVersionRef.current === mountEditVersionRef.current
+            ) {
+                hasUnsavedChangesRef.current = true;
+                setHasUnsavedChanges(true);
+            }
+        };
+
+        mountedEditorSyncListeners.add(handleSync);
+        if (loadedPostIdRef.current) {
+            handleSync(loadedPostIdRef.current);
+        }
+        return () => {
+            mountedEditorSyncListeners.delete(handleSync);
+        };
+    }, []);
 
     useEffect(() => {
         contentRef.current = content;
@@ -494,6 +551,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                     includePendingPublish: true,
                     publishVersionAtCall: publishVersionByPost.get(targetPostId) ?? 0,
                 });
+                notifyMountedEditors(targetPostId);
             });
             if (discarded) {
                 onNavigateBack();

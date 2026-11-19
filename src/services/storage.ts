@@ -147,7 +147,7 @@ const nextSettingsTimestamp = (): number => {
     return next;
 };
 
-const bumpLastPostUpdatedAt = (timestamp?: number): void => {
+export const bumpLastPostUpdatedAt = (timestamp?: number): void => {
     if (typeof timestamp !== 'number') {
         return;
     }
@@ -155,7 +155,7 @@ const bumpLastPostUpdatedAt = (timestamp?: number): void => {
     shared[POST_UPDATED_AT_SYM] = Math.max(shared[POST_UPDATED_AT_SYM] ?? 0, timestamp);
 };
 
-const nextPostTimestamp = (minFloor = 0): number => {
+export const nextPostTimestamp = (minFloor = 0): number => {
     const shared = getSharedState();
     const next = Math.max(Date.now(), (shared[POST_UPDATED_AT_SYM] ?? 0) + 1, minFloor + 1);
     shared[POST_UPDATED_AT_SYM] = next;
@@ -307,13 +307,15 @@ const normalizeStoredPost = (post: Post): Post => ({
 
 const _getPosts = async (): Promise<Post[]> => {
     const webext = getWebExt();
-    if (webext?.storage?.local) {
-        const result = await webext.storage.local.get(STORAGE_KEYS.POSTS);
-        const posts = (result[STORAGE_KEYS.POSTS] || []) as Post[];
-        return posts.map(normalizeStoredPost);
+    const rawPosts = webext?.storage?.local
+        ? (((await webext.storage.local.get(STORAGE_KEYS.POSTS))[STORAGE_KEYS.POSTS] ||
+              []) as Post[])
+        : readLocal<Post[]>(STORAGE_KEYS.POSTS, []);
+    const posts = rawPosts.map(normalizeStoredPost);
+    for (const post of posts) {
+        bumpLastPostUpdatedAt(post.updatedAt);
     }
-
-    return readLocal<Post[]>(STORAGE_KEYS.POSTS, []).map(normalizeStoredPost);
+    return posts;
 };
 
 const _savePosts = async (posts: Post[]): Promise<void> => {
