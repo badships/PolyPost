@@ -3,7 +3,12 @@ import type { Folder } from '@/types';
 import { storage } from '@/services/storage';
 import { generateId } from '@/utils';
 import { FOLDER_COLORS } from '@/types';
-import { usePostsStore, nextLocalPostTimestamp, isPromotingLocalDraft } from './postsStore';
+import {
+    usePostsStore,
+    nextLocalPostTimestamp,
+    isPromotingLocalDraft,
+    markFolderDeleted,
+} from './postsStore';
 import { useUIStore } from './uiStore';
 
 interface FoldersState {
@@ -64,6 +69,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
 
     deleteFolder: async (id: string) => {
         const storedPosts = await storage.deleteFolder(id);
+        markFolderDeleted(id);
         const storedPostById = new Map(storedPosts.map((p) => [p.id, p]));
         set((state) => ({
             folders: state.folders.filter((f) => f.id !== id),
@@ -72,7 +78,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
             posts: state.posts.map((p) => {
                 const persisted = storedPostById.get(p.id);
                 if (persisted) {
-                    return persisted;
+                    return persisted.updatedAt > p.updatedAt ? persisted : p;
                 }
                 if (p.folderId !== id || isPromotingLocalDraft(p.id)) {
                     return p;

@@ -34,11 +34,21 @@ interface PostsState {
 
 const localBlankDraftIds = new Set<string>();
 const pendingLocalPromotions = new Map<string, Promise<void>>();
+const deletedFolderIds = new Set<string>();
+
+export const markFolderDeleted = (folderId: string): void => {
+    deletedFolderIds.add(folderId);
+};
 
 export const isPromotingLocalDraft = (id: string): boolean => pendingLocalPromotions.has(id);
 
 export const nextLocalPostTimestamp = (minFloor = 0): number => {
     return nextPostTimestamp(minFloor);
+};
+
+const pickNewerPost = (candidate: Post, existing?: Post): Post => {
+    if (!existing) return candidate;
+    return existing.updatedAt > candidate.updatedAt ? existing : candidate;
 };
 
 export const usePostsStore = create<PostsState>((set, get) => {
@@ -70,10 +80,12 @@ export const usePostsStore = create<PostsState>((set, get) => {
             : localDraft;
 
         const promotionPromise = storage.addPost(toPersist).then((savedPost) => {
-            const authoritativePost = getLatestPersistedPost(id) ?? savedPost;
+            const authoritativePost = pickNewerPost(savedPost, getLatestPersistedPost(id));
             localBlankDraftIds.delete(id);
             set((state) => ({
-                posts: state.posts.map((p) => (p.id === id ? authoritativePost : p)),
+                posts: state.posts.map((p) =>
+                    p.id === id ? pickNewerPost(authoritativePost, p) : p,
+                ),
                 newlyCreatedDraft:
                     state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
             }));
@@ -82,6 +94,21 @@ export const usePostsStore = create<PostsState>((set, get) => {
         pendingLocalPromotions.set(id, promotionPromise);
         try {
             await promotionPromise;
+        } catch (error) {
+            if (localBlankDraftIds.has(id)) {
+                set((state) => ({
+                    posts: state.posts.map((p) =>
+                        p.id === id && p.folderId !== null && deletedFolderIds.has(p.folderId)
+                            ? {
+                                  ...p,
+                                  folderId: null,
+                                  updatedAt: nextLocalPostTimestamp(p.updatedAt),
+                              }
+                            : p,
+                    ),
+                }));
+            }
+            throw error;
         } finally {
             if (pendingLocalPromotions.get(id) === promotionPromise) {
                 pendingLocalPromotions.delete(id);
@@ -149,26 +176,35 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 localBlankDraftIds.add(post.id);
             } else {
                 const savedPost = await storage.addPost(post);
-                persistedPost = getLatestPersistedPost(post.id) ?? savedPost;
+                persistedPost = pickNewerPost(savedPost, getLatestPersistedPost(post.id));
             }
 
             set((state) => {
                 const latestPost = isBlankDraft
                     ? persistedPost
-                    : (getLatestPersistedPost(persistedPost.id) ?? persistedPost);
-                const exists = state.posts.some((p) => p.id === latestPost.id);
+                    : pickNewerPost(persistedPost, getLatestPersistedPost(persistedPost.id));
+                const existing = state.posts.find((p) => p.id === latestPost.id);
+                const resolvedPost = existing ? pickNewerPost(latestPost, existing) : latestPost;
                 return {
-                    posts: exists
-                        ? state.posts.map((p) => (p.id === latestPost.id ? latestPost : p))
-                        : [...state.posts, latestPost],
+                    posts: existing
+                        ? state.posts.map((p) => (p.id === resolvedPost.id ? resolvedPost : p))
+                        : [...state.posts, resolvedPost],
                     newlyCreatedDraft: isBlankDraft
-                        ? { id: latestPost.id, updatedAt: latestPost.updatedAt }
+                        ? { id: resolvedPost.id, updatedAt: resolvedPost.updatedAt }
                         : state.newlyCreatedDraft,
                 };
             });
-            return isBlankDraft
-                ? persistedPost
-                : (getLatestPersistedPost(persistedPost.id) ?? persistedPost);
+            if (isBlankDraft) {
+                return persistedPost;
+            }
+            const authoritativePost = pickNewerPost(
+                persistedPost,
+                getLatestPersistedPost(persistedPost.id),
+            );
+            return pickNewerPost(
+                authoritativePost,
+                get().posts.find((p) => p.id === authoritativePost.id),
+            );
         },
 
         updatePost: async (id: string, updates: Partial<Post>) => {
@@ -178,8 +214,14 @@ export const usePostsStore = create<PostsState>((set, get) => {
             }
 
             const savedPost = await storage.updatePost(id, updates);
+            if (!savedPost) {
+                throw new Error('Post no longer exists in storage');
+            }
+            const authoritativePost = pickNewerPost(savedPost, getLatestPersistedPost(id));
             set((state) => ({
-                posts: state.posts.map((p) => (p.id === id ? savedPost : p)),
+                posts: state.posts.map((p) =>
+                    p.id === id ? pickNewerPost(authoritativePost, p) : p,
+                ),
                 newlyCreatedDraft:
                     state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
             }));

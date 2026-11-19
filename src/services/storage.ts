@@ -307,6 +307,17 @@ const normalizeStoredPost = (post: Post): Post => ({
 
 const latestPersistedPostsById = new Map<string, Post>();
 
+export const recordLatestPersistedPost = (post: Post): Post => {
+    const normalized = normalizeStoredPost(post);
+    bumpLastPostUpdatedAt(normalized.updatedAt);
+    const existing = latestPersistedPostsById.get(normalized.id);
+    if (!existing || normalized.updatedAt >= existing.updatedAt) {
+        latestPersistedPostsById.set(normalized.id, normalized);
+        return normalized;
+    }
+    return existing;
+};
+
 const syncLatestPersistedPosts = (posts: Post[]): void => {
     latestPersistedPostsById.clear();
     for (const post of posts) {
@@ -333,14 +344,15 @@ const _getPosts = async (): Promise<Post[]> => {
 };
 
 const _savePosts = async (posts: Post[]): Promise<void> => {
-    syncLatestPersistedPosts(posts);
     const webext = getWebExt();
     if (webext?.storage?.local) {
         await webext.storage.local.set({ [STORAGE_KEYS.POSTS]: posts });
+        syncLatestPersistedPosts(posts);
         return;
     }
 
     writeLocal(STORAGE_KEYS.POSTS, posts);
+    syncLatestPersistedPosts(posts);
 };
 
 const _getVariants = async (): Promise<Variant[]> => {
@@ -671,18 +683,19 @@ const localMutations = {
             const [posts, variants] = await Promise.all([_getPosts(), _getVariants()]);
             const filtered = posts.filter((p) => p.id !== id);
             const filteredVariants = variants.filter((v) => v.postId !== id);
-            syncLatestPersistedPosts(filtered);
             const webext = getWebExt();
             if (webext?.storage?.local) {
                 await webext.storage.local.set({
                     [STORAGE_KEYS.POSTS]: filtered,
                     [STORAGE_KEYS.VARIANTS]: filteredVariants,
                 });
+                syncLatestPersistedPosts(filtered);
                 return;
             }
 
             writeLocal(STORAGE_KEYS.POSTS, filtered);
             writeLocal(STORAGE_KEYS.VARIANTS, filteredVariants);
+            syncLatestPersistedPosts(filtered);
         });
     },
 
@@ -776,23 +789,29 @@ const localMutations = {
         return enqueueStorageOp(async () => {
             const [folders, posts] = await Promise.all([_getFolders(), _getPosts()]);
             const filtered = folders.filter((f) => f.id !== id);
+            const shared = getSharedState();
+            const prevPostUpdatedAt = shared[POST_UPDATED_AT_SYM] ?? 0;
             const updatedPosts = posts.map((p) =>
                 p.folderId === id
                     ? { ...p, folderId: null, updatedAt: nextPostTimestamp(p.updatedAt) }
                     : p,
             );
-            syncLatestPersistedPosts(updatedPosts);
             const webext = getWebExt();
-            if (webext?.storage?.local) {
-                await webext.storage.local.set({
-                    [STORAGE_KEYS.FOLDERS]: filtered,
-                    [STORAGE_KEYS.POSTS]: updatedPosts,
-                });
-                return updatedPosts;
+            try {
+                if (webext?.storage?.local) {
+                    await webext.storage.local.set({
+                        [STORAGE_KEYS.FOLDERS]: filtered,
+                        [STORAGE_KEYS.POSTS]: updatedPosts,
+                    });
+                } else {
+                    writeLocal(STORAGE_KEYS.FOLDERS, filtered);
+                    writeLocal(STORAGE_KEYS.POSTS, updatedPosts);
+                }
+            } catch (error) {
+                shared[POST_UPDATED_AT_SYM] = prevPostUpdatedAt;
+                throw error;
             }
-
-            writeLocal(STORAGE_KEYS.FOLDERS, filtered);
-            writeLocal(STORAGE_KEYS.POSTS, updatedPosts);
+            syncLatestPersistedPosts(updatedPosts);
             return updatedPosts;
         });
     },
@@ -847,6 +866,27 @@ const runMutation = async <M extends StorageMutationMethod>(
         }
         if (!rpcResponse.ok) {
             throw new Error(rpcResponse.error || 'Storage operation failed');
+        }
+        if (
+            (method === 'addPost' || method === 'updatePost') &&
+            rpcResponse.value &&
+            typeof rpcResponse.value === 'object'
+        ) {
+            recordLatestPersistedPost(rpcResponse.value as Post);
+        } else if (method === 'deleteFolder' && Array.isArray(rpcResponse.value)) {
+            for (const post of rpcResponse.value as Post[]) {
+                recordLatestPersistedPost(post);
+            }
+        } else if (method === 'deletePost' && typeof args[0] === 'string') {
+            latestPersistedPostsById.delete(args[0]);
+        } else if (
+            method === 'deleteEmptyDraftIfUnmodified' &&
+            rpcResponse.value === true &&
+            typeof args[0] === 'string'
+        ) {
+            latestPersistedPostsById.delete(args[0]);
+        } else if (method === 'savePosts' && Array.isArray(args[0])) {
+            syncLatestPersistedPosts(args[0] as Post[]);
         }
         return rpcResponse.value as Awaited<ReturnType<(typeof localMutations)[M]>>;
     }

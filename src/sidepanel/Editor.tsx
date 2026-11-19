@@ -333,7 +333,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             const initialContent = hasNewerQueuedSource
                 ? latestQueuedContentByPost.get(post.id)!
                 : post.sourceContent;
-            const initialDirty = initialContent !== post.sourceContent;
+            const initialDirty = hasNewerQueuedSource || initialContent !== post.sourceContent;
             const initialVersion = hasNewerQueuedSource
                 ? queuedVersion
                 : Math.max(committedVersion, 0);
@@ -387,7 +387,8 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 }
             } else if (
                 !hasUnsavedChangesRef.current &&
-                editVersionRef.current === mountEditVersionRef.current
+                editVersionRef.current === mountEditVersionRef.current &&
+                committedVer >= editVersionRef.current
             ) {
                 contentRef.current = committed;
                 setContent(committed);
@@ -395,7 +396,10 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                     editVersionRef.current = Math.max(editVersionRef.current, committedVer);
                     mountEditVersionRef.current = editVersionRef.current;
                 }
-            } else if (editVersionRef.current === mountEditVersionRef.current) {
+            } else if (
+                editVersionRef.current > committedVer ||
+                editVersionRef.current === mountEditVersionRef.current
+            ) {
                 hasUnsavedChangesRef.current = true;
                 setHasUnsavedChanges(true);
             }
