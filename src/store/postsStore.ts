@@ -40,6 +40,13 @@ interface PostsState {
 const localBlankDraftIds = new Set<string>();
 const pendingLocalPromotions = new Map<string, Promise<void>>();
 const deletedFolderIds = new Set<string>();
+const newlyCreatedDraftRevisions = new Map<string, number>();
+let postMutationSeq = 0;
+const postWriteSeqById = new Map<string, number>();
+let variantMutationSeq = 0;
+const variantWriteSeqById = new Map<string, number>();
+const postVariantSelectionSeqByPostId = new Map<string, number>();
+const deletedVariantIds = new Set<string>();
 
 export const markFolderDeleted = (folderId: string): void => {
     deletedFolderIds.add(folderId);
@@ -47,6 +54,34 @@ export const markFolderDeleted = (folderId: string): void => {
 
 export const clearDeletedFolderMark = (folderId: string): void => {
     deletedFolderIds.delete(folderId);
+};
+
+export const isFolderDeleted = (folderId: string): boolean => deletedFolderIds.has(folderId);
+
+export const getNewlyCreatedDraftRevision = (id: string): number | undefined => {
+    return newlyCreatedDraftRevisions.get(id);
+};
+
+export const syncNewlyCreatedDraftRevision = (post: Post): void => {
+    if (
+        newlyCreatedDraftRevisions.has(post.id) &&
+        post.status === 'draft' &&
+        !post.sourceContent.trim()
+    ) {
+        newlyCreatedDraftRevisions.set(post.id, post.updatedAt);
+    }
+};
+
+const recordPostWrite = (id: string): void => {
+    postWriteSeqById.set(id, ++postMutationSeq);
+};
+
+const recordVariantWrite = (id: string): void => {
+    variantWriteSeqById.set(id, ++variantMutationSeq);
+};
+
+const recordPostVariantSelection = (postId: string): void => {
+    postVariantSelectionSeqByPostId.set(postId, ++variantMutationSeq);
 };
 
 export const isPromotingLocalDraft = (id: string): boolean => pendingLocalPromotions.has(id);
@@ -84,24 +119,36 @@ export const usePostsStore = create<PostsState>((set, get) => {
         const localDraft = get().posts.find((p) => p.id === id);
         if (!localDraft) {
             localBlankDraftIds.delete(id);
+            newlyCreatedDraftRevisions.delete(id);
             throw new Error('Post no longer exists');
         }
 
+        const sanitizedUpdates =
+            updates &&
+            'folderId' in updates &&
+            updates.folderId !== null &&
+            updates.folderId !== undefined &&
+            deletedFolderIds.has(updates.folderId)
+                ? { ...updates, folderId: null }
+                : updates;
+
         const toPersist: Post = sanitizePostFolder(
-            updates
+            sanitizedUpdates
                 ? {
                       ...localDraft,
-                      ...updates,
+                      ...sanitizedUpdates,
                       updatedAt: nextLocalPostTimestamp(localDraft.updatedAt),
                   }
                 : localDraft,
         );
 
-        const promotionPromise = storage.addPost(toPersist).then((savedPost) => {
+        const promotionPromise = storage.addPost(toPersist, sanitizedUpdates).then((savedPost) => {
             const authoritativePost = sanitizePostFolder(
                 pickNewerPost(savedPost, getLatestPersistedPost(id)),
             );
+            recordPostWrite(id);
             localBlankDraftIds.delete(id);
+            newlyCreatedDraftRevisions.delete(id);
             set((state) => ({
                 posts: state.posts.map((p) =>
                     p.id === id ? pickNewerPost(authoritativePost, p) : p,
@@ -125,6 +172,12 @@ export const usePostsStore = create<PostsState>((set, get) => {
                             deletedFolderIds.has(p.folderId)
                         ) {
                             const nextUpdatedAt = nextLocalPostTimestamp(p.updatedAt);
+                            const nextPost: Post = {
+                                ...p,
+                                folderId: null,
+                                updatedAt: nextUpdatedAt,
+                            };
+                            syncNewlyCreatedDraftRevision(nextPost);
                             if (
                                 state.newlyCreatedDraft?.id === p.id &&
                                 p.status === 'draft' &&
@@ -132,11 +185,7 @@ export const usePostsStore = create<PostsState>((set, get) => {
                             ) {
                                 nextNewlyCreatedDraft = { id: p.id, updatedAt: nextUpdatedAt };
                             }
-                            return {
-                                ...p,
-                                folderId: null,
-                                updatedAt: nextUpdatedAt,
-                            };
+                            return nextPost;
                         }
                         return p;
                     });
@@ -164,6 +213,8 @@ export const usePostsStore = create<PostsState>((set, get) => {
         isLoading: false,
 
         loadPosts: async () => {
+            const postSeqAtStart = postMutationSeq;
+            const variantSeqAtStart = variantMutationSeq;
             set({ isLoading: true });
             try {
                 const [posts, variants] = await Promise.all([
@@ -181,6 +232,7 @@ export const usePostsStore = create<PostsState>((set, get) => {
                     for (const rawPost of posts) {
                         if (isPostEvicted(rawPost.id)) {
                             localBlankDraftIds.delete(rawPost.id);
+                            newlyCreatedDraftRevisions.delete(rawPost.id);
                             continue;
                         }
                         storedIds.add(rawPost.id);
@@ -204,18 +256,54 @@ export const usePostsStore = create<PostsState>((set, get) => {
                         if (
                             localBlankDraftIds.has(p.id) ||
                             isPromotingLocalDraft(p.id) ||
-                            latestPersisted !== undefined
+                            (postWriteSeqById.get(p.id) ?? 0) > postSeqAtStart
                         ) {
-                            const resolved = latestPersisted
-                                ? pickNewerPost(latestPersisted, p)
-                                : p;
+                            const resolved = latestPersisted ? pickNewerPost(latestPersisted, p) : p;
                             mergedPosts.push(sanitizePostFolder(resolved));
+                        }
+                    }
+
+                    const existingVariantById = new Map(state.variants.map((v) => [v.id, v]));
+                    const storedVariantIds = new Set<string>();
+                    const mergedVariants: Variant[] = [];
+
+                    for (const rawVariant of variants) {
+                        if (
+                            deletedVariantIds.has(rawVariant.id) ||
+                            isPostEvicted(rawVariant.postId)
+                        ) {
+                            continue;
+                        }
+                        storedVariantIds.add(rawVariant.id);
+                        const existingVariant = existingVariantById.get(rawVariant.id);
+                        if (
+                            existingVariant &&
+                            ((variantWriteSeqById.get(rawVariant.id) ?? 0) > variantSeqAtStart ||
+                                (postVariantSelectionSeqByPostId.get(rawVariant.postId) ?? 0) >
+                                    variantSeqAtStart)
+                        ) {
+                            mergedVariants.push(existingVariant);
+                        } else {
+                            mergedVariants.push(rawVariant);
+                        }
+                    }
+
+                    for (const currentVariant of state.variants) {
+                        if (
+                            storedVariantIds.has(currentVariant.id) ||
+                            deletedVariantIds.has(currentVariant.id) ||
+                            isPostEvicted(currentVariant.postId)
+                        ) {
+                            continue;
+                        }
+                        if ((variantWriteSeqById.get(currentVariant.id) ?? 0) > variantSeqAtStart) {
+                            mergedVariants.push(currentVariant);
                         }
                     }
 
                     return {
                         posts: mergedPosts,
-                        variants,
+                        variants: mergedVariants,
                         isLoading: false,
                     };
                 });
@@ -242,7 +330,10 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 // Keep new blank drafts local until the first save or variant creation
                 // so another panel cannot open or edit an uncommitted blank draft.
                 localBlankDraftIds.add(post.id);
+                newlyCreatedDraftRevisions.set(post.id, post.updatedAt);
+                recordPostWrite(post.id);
             } else {
+                recordPostWrite(post.id);
                 const savedPost = await storage.addPost(post);
                 persistedPost = sanitizePostFolder(
                     pickNewerPost(savedPost, getLatestPersistedPost(post.id)),
@@ -259,6 +350,9 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 const resolvedPost = existing
                     ? sanitizePostFolder(pickNewerPost(latestPost, existing))
                     : latestPost;
+                if (isBlankDraft) {
+                    syncNewlyCreatedDraftRevision(resolvedPost);
+                }
                 return {
                     posts: existing
                         ? state.posts.map((p) => (p.id === resolvedPost.id ? resolvedPost : p))
@@ -297,6 +391,7 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 deletedFolderIds.has(updates.folderId)
                     ? { ...updates, folderId: null }
                     : updates;
+            recordPostWrite(id);
             const savedPost = await storage.updatePost(id, sanitizedUpdates);
             if (!savedPost) {
                 throw new Error('Post no longer exists in storage');
@@ -304,6 +399,7 @@ export const usePostsStore = create<PostsState>((set, get) => {
             const authoritativePost = sanitizePostFolder(
                 pickNewerPost(savedPost, getLatestPersistedPost(id)),
             );
+            newlyCreatedDraftRevisions.delete(id);
             set((state) => ({
                 posts: state.posts.map((p) =>
                     p.id === id ? pickNewerPost(authoritativePost, p) : p,
@@ -319,6 +415,8 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 await pending.catch(() => undefined);
             }
 
+            recordPostWrite(id);
+            newlyCreatedDraftRevisions.delete(id);
             if (localBlankDraftIds.has(id)) {
                 localBlankDraftIds.delete(id);
             } else {
@@ -351,6 +449,7 @@ export const usePostsStore = create<PostsState>((set, get) => {
                     target.sourceContent.trim().length > 0 ||
                     hasVariants
                 ) {
+                    newlyCreatedDraftRevisions.delete(id);
                     set((s) => ({
                         newlyCreatedDraft:
                             s.newlyCreatedDraft?.id === id ? null : s.newlyCreatedDraft,
@@ -359,6 +458,8 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 }
 
                 localBlankDraftIds.delete(id);
+                newlyCreatedDraftRevisions.delete(id);
+                recordPostWrite(id);
                 set((s) => ({
                     posts: s.posts.filter((p) => p.id !== id),
                     variants: s.variants.filter((v) => v.postId !== id),
@@ -369,7 +470,9 @@ export const usePostsStore = create<PostsState>((set, get) => {
             }
 
             const deleted = await storage.deleteEmptyDraftIfUnmodified(id, expectedUpdatedAt);
+            newlyCreatedDraftRevisions.delete(id);
             if (deleted) {
+                recordPostWrite(id);
                 set((state) => ({
                     posts: state.posts.filter((p) => p.id !== id),
                     variants: state.variants.filter((v) => v.postId !== id),
@@ -388,6 +491,11 @@ export const usePostsStore = create<PostsState>((set, get) => {
         },
 
         clearNewlyCreatedDraft: (id?: string) => {
+            if (id) {
+                newlyCreatedDraftRevisions.delete(id);
+            } else {
+                newlyCreatedDraftRevisions.clear();
+            }
             set((state) => ({
                 newlyCreatedDraft:
                     !id || state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
@@ -402,11 +510,59 @@ export const usePostsStore = create<PostsState>((set, get) => {
         },
 
         loadVariants: async (postId: string) => {
+            const variantSeqAtStart = variantMutationSeq;
             try {
                 const variants = await storage.getVariantsByPostId(postId);
-                set((state) => ({
-                    variants: [...state.variants.filter((v) => v.postId !== postId), ...variants],
-                }));
+                set((state) => {
+                    const otherVariants = state.variants.filter(
+                        (v) =>
+                            v.postId !== postId &&
+                            !isPostEvicted(v.postId) &&
+                            !deletedVariantIds.has(v.id),
+                    );
+                    const currentPostVariants = state.variants.filter((v) => v.postId === postId);
+                    const existingById = new Map(currentPostVariants.map((v) => [v.id, v]));
+                    const storedVariantIds = new Set<string>();
+                    const mergedPostVariants: Variant[] = [];
+
+                    for (const rawVariant of variants) {
+                        if (
+                            deletedVariantIds.has(rawVariant.id) ||
+                            isPostEvicted(rawVariant.postId)
+                        ) {
+                            continue;
+                        }
+                        storedVariantIds.add(rawVariant.id);
+                        const existingVariant = existingById.get(rawVariant.id);
+                        if (
+                            existingVariant &&
+                            ((variantWriteSeqById.get(rawVariant.id) ?? 0) > variantSeqAtStart ||
+                                (postVariantSelectionSeqByPostId.get(postId) ?? 0) >
+                                    variantSeqAtStart)
+                        ) {
+                            mergedPostVariants.push(existingVariant);
+                        } else {
+                            mergedPostVariants.push(rawVariant);
+                        }
+                    }
+
+                    for (const currentVariant of currentPostVariants) {
+                        if (
+                            storedVariantIds.has(currentVariant.id) ||
+                            deletedVariantIds.has(currentVariant.id) ||
+                            isPostEvicted(currentVariant.postId)
+                        ) {
+                            continue;
+                        }
+                        if ((variantWriteSeqById.get(currentVariant.id) ?? 0) > variantSeqAtStart) {
+                            mergedPostVariants.push(currentVariant);
+                        }
+                    }
+
+                    return {
+                        variants: [...otherVariants, ...mergedPostVariants],
+                    };
+                });
             } catch (error) {
                 console.error('Failed to load variants:', error);
             }
@@ -425,13 +581,17 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 createdAt: Date.now(),
             };
 
+            recordVariantWrite(variant.id);
             await storage.addVariant(variant);
             if (!get().posts.some((p) => p.id === variant.postId)) {
                 throw new Error('Post no longer exists');
             }
 
+            newlyCreatedDraftRevisions.delete(variantData.postId);
             set((state) => ({
-                variants: [...state.variants, variant],
+                variants: state.variants.some((v) => v.id === variant.id)
+                    ? state.variants.map((v) => (v.id === variant.id ? variant : v))
+                    : [...state.variants, variant],
                 newlyCreatedDraft:
                     state.newlyCreatedDraft?.id === variantData.postId
                         ? null
@@ -444,35 +604,42 @@ export const usePostsStore = create<PostsState>((set, get) => {
             const variant = get().variants.find((v) => v.id === variantId);
             if (!variant) return;
 
-            // Deselect all variants for this post, then select the chosen one
-            const updatedVariants = get().variants.map((v) =>
-                v.postId === variant.postId ? { ...v, isSelected: v.id === variantId } : v,
-            );
+            recordPostVariantSelection(variant.postId);
+            const targetIds = get()
+                .variants.filter((v) => v.postId === variant.postId)
+                .map((v) => v.id);
 
             // Update in storage
-            for (const v of updatedVariants.filter((v) => v.postId === variant.postId)) {
-                await storage.updateVariant(v.id, { isSelected: v.isSelected });
+            for (const id of targetIds) {
+                await storage.updateVariant(id, { isSelected: id === variantId });
             }
 
-            set({ variants: updatedVariants });
+            set((state) => ({
+                variants: state.variants.map((v) =>
+                    v.postId === variant.postId ? { ...v, isSelected: v.id === variantId } : v,
+                ),
+            }));
         },
 
         deselectVariants: async (postId: string) => {
             const postVariants = get().variants.filter((v) => v.postId === postId && v.isSelected);
             if (postVariants.length === 0) return;
 
-            const updatedVariants = get().variants.map((v) =>
-                v.postId === postId ? { ...v, isSelected: false } : v,
-            );
-
+            recordPostVariantSelection(postId);
             for (const v of postVariants) {
                 await storage.updateVariant(v.id, { isSelected: false });
             }
 
-            set({ variants: updatedVariants });
+            set((state) => ({
+                variants: state.variants.map((v) =>
+                    v.postId === postId ? { ...v, isSelected: false } : v,
+                ),
+            }));
         },
 
         deleteVariant: async (id: string) => {
+            deletedVariantIds.add(id);
+            recordVariantWrite(id);
             await storage.deleteVariant(id);
             set((state) => ({
                 variants: state.variants.filter((v) => v.id !== id),

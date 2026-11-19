@@ -2,7 +2,13 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { ArrowUpRight, ChevronLeft } from 'lucide-react';
 import { Button, Badge } from '@/components/ui';
 import { SourceEditor, VariantsPanel, PolishModal, TranslateModal } from '@/components/editor';
-import { usePostsStore, useSettingsStore, useUIStore, useFoldersStore } from '@/store';
+import {
+    usePostsStore,
+    useSettingsStore,
+    useUIStore,
+    useFoldersStore,
+    getNewlyCreatedDraftRevision,
+} from '@/store';
 import { aiService } from '@/services/ai';
 import { resolveActiveProviderConfig } from '@/services/settingsDefaults';
 import { ensureHostPermission } from '@/services/permissions';
@@ -31,10 +37,11 @@ interface EditorProps {
 // Module-level save queue and sync state shared across Editor mount cycles
 // so delayed autosaves cannot race with newly reopened Editor instances.
 let sharedSaveChain: Promise<void> = Promise.resolve();
-let sharedInFlightSaveCount = 0;
 let sharedEditVersion = 0;
 let sharedQueueTicket = 0;
+const inFlightSaveCountByPost = new Map<string, number>();
 const committedContentByPost = new Map<string, string>();
+const committedUpdatedAtByPost = new Map<string, number>();
 const committedVersionByPost = new Map<string, number>();
 const pendingPublishByPost = new Map<string, boolean>();
 const publishVersionByPost = new Map<string, number>();
@@ -114,14 +121,29 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
     const loadedPostIdRef = useRef<string | null>(null);
     const createdDraftRevisionRef = useRef<number | null>(null);
 
-    const enqueueEditorSave = useCallback((task: () => Promise<void>): Promise<void> => {
-        sharedInFlightSaveCount += 1;
-        const next = sharedSaveChain.then(task, task).finally(() => {
-            sharedInFlightSaveCount = Math.max(0, sharedInFlightSaveCount - 1);
-        });
-        sharedSaveChain = next.catch(() => undefined);
-        return next;
-    }, []);
+    const enqueueEditorSave = useCallback(
+        (task: () => Promise<void>, targetPostId?: string): Promise<void> => {
+            if (targetPostId) {
+                inFlightSaveCountByPost.set(
+                    targetPostId,
+                    (inFlightSaveCountByPost.get(targetPostId) ?? 0) + 1,
+                );
+            }
+            const next = sharedSaveChain.then(task, task).finally(() => {
+                if (targetPostId) {
+                    const remaining = (inFlightSaveCountByPost.get(targetPostId) ?? 1) - 1;
+                    if (remaining <= 0) {
+                        inFlightSaveCountByPost.delete(targetPostId);
+                    } else {
+                        inFlightSaveCountByPost.set(targetPostId, remaining);
+                    }
+                }
+            });
+            sharedSaveChain = next.catch(() => undefined);
+            return next;
+        },
+        [],
+    );
 
     const executePostCommit = useCallback(
         async (options: {
@@ -191,6 +213,10 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
 
             if (needSource) {
                 committedContentByPost.set(targetPostId, sourceContent);
+                const latestPostAfterWrite = usePostsStore.getState().getPostById(targetPostId);
+                if (latestPostAfterWrite) {
+                    committedUpdatedAtByPost.set(targetPostId, latestPostAfterWrite.updatedAt);
+                }
                 if (versionAtCall !== undefined) {
                     const nextCommittedVersion = Math.max(
                         committedVersionByPost.get(targetPostId) ?? -1,
@@ -279,7 +305,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                     }
                     notifyMountedEditors(targetPostId);
                 }
-            });
+            }, targetPostId);
         },
         [enqueueEditorSave, executePostCommit],
     );
@@ -318,15 +344,24 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         if (loadedPostIdRef.current !== post.id) {
             loadedPostIdRef.current = post.id;
             const createdDraft = usePostsStore.getState().newlyCreatedDraft;
+            const trackedDraftRevision =
+                getNewlyCreatedDraftRevision(post.id) ??
+                (createdDraft?.id === post.id ? createdDraft.updatedAt : undefined);
             createdDraftRevisionRef.current =
-                createdDraft?.id === post.id &&
-                createdDraft.updatedAt === post.updatedAt &&
+                trackedDraftRevision === post.updatedAt &&
                 post.status === 'draft' &&
                 !post.sourceContent.trim()
                     ? post.updatedAt
                     : null;
-            if (sharedInFlightSaveCount === 0 || !committedContentByPost.has(post.id)) {
+            const postInFlightCount = inFlightSaveCountByPost.get(post.id) ?? 0;
+            const prevCommittedUpdatedAt = committedUpdatedAtByPost.get(post.id) ?? -1;
+            if (
+                postInFlightCount === 0 ||
+                !committedContentByPost.has(post.id) ||
+                post.updatedAt > prevCommittedUpdatedAt
+            ) {
                 committedContentByPost.set(post.id, post.sourceContent);
+                committedUpdatedAtByPost.set(post.id, post.updatedAt);
             }
             const queuedVersion = latestQueuedVersionByPost.get(post.id);
             const committedVersion = committedVersionByPost.get(post.id) ?? -1;
@@ -352,16 +387,20 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             setHasPendingPublishStatus(Boolean(pendingPublishByPost.get(post.id)));
             if (createdDraftRevisionRef.current !== null) {
                 const createdDraft = usePostsStore.getState().newlyCreatedDraft;
+                const trackedDraftRevision =
+                    getNewlyCreatedDraftRevision(post.id) ??
+                    (createdDraft?.id === post.id ? createdDraft.updatedAt : undefined);
                 createdDraftRevisionRef.current =
-                    createdDraft?.id === post.id &&
-                    createdDraft.updatedAt === post.updatedAt &&
+                    trackedDraftRevision === post.updatedAt &&
                     post.status === 'draft' &&
                     !post.sourceContent.trim()
                         ? post.updatedAt
                         : null;
             }
-            if (sharedInFlightSaveCount === 0) {
+            const postInFlightCount = inFlightSaveCountByPost.get(post.id) ?? 0;
+            if (postInFlightCount === 0) {
                 committedContentByPost.set(post.id, post.sourceContent);
+                committedUpdatedAtByPost.set(post.id, post.updatedAt);
                 const queuedVersion = latestQueuedVersionByPost.get(post.id);
                 const committedVersion = committedVersionByPost.get(post.id) ?? -1;
                 const hasUncommittedQueuedSource =
@@ -585,9 +624,12 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             let discarded = false;
             await enqueueEditorSave(async () => {
                 const createdDraft = usePostsStore.getState().newlyCreatedDraft;
+                const trackedRevision =
+                    getNewlyCreatedDraftRevision(targetPostId) ??
+                    (createdDraft?.id === targetPostId ? createdDraft.updatedAt : undefined);
                 const liveRevision =
-                    createdDraftRevisionRef.current !== null && createdDraft?.id === targetPostId
-                        ? createdDraft.updatedAt
+                    createdDraftRevisionRef.current !== null && trackedRevision !== undefined
+                        ? trackedRevision
                         : createdDraftRevisionRef.current;
                 const liveContent = contentRef.current;
                 const liveVariants = usePostsStore.getState().getVariantsByPostId(targetPostId);
@@ -605,6 +647,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                         latestQueuedVersionByPost.delete(targetPostId);
                         latestQueuedContentByPost.delete(targetPostId);
                         committedContentByPost.delete(targetPostId);
+                        committedUpdatedAtByPost.delete(targetPostId);
                         committedVersionByPost.delete(targetPostId);
                         if (loadedPostIdRef.current === targetPostId) {
                             createdDraftRevisionRef.current = null;
@@ -636,7 +679,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                     publishVersionAtCall: publishVersionByPost.get(targetPostId) ?? 0,
                 });
                 notifyMountedEditors(targetPostId);
-            });
+            }, targetPostId);
             if (discarded) {
                 onNavigateBack();
                 return;
@@ -901,7 +944,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 if (loadedPostIdRef.current === targetPostId) {
                     createdDraftRevisionRef.current = null;
                 }
-            });
+            }, targetPostId);
         } catch (err) {
             console.error('Change folder failed:', err);
             setError(err instanceof Error ? err.message : 'Failed to update folder');

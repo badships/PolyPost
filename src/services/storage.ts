@@ -308,6 +308,10 @@ const normalizeStoredPost = (post: Post): Post => ({
 const latestPersistedPostsById = new Map<string, Post>();
 const evictedPostIds = new Set<string>();
 let storageMutationSeq = 0;
+let storageOpClock = 0;
+let latestPostsReadStartClock = 0;
+const presentPostIdsAtLatestRead = new Set<string>();
+const inFlightAddPostIds = new Set<string>();
 
 export const isPostEvicted = (id: string): boolean => evictedPostIds.has(id);
 
@@ -343,6 +347,7 @@ export const getLatestPersistedPost = (id: string): Post | undefined => {
 
 const _getPosts = async (): Promise<Post[]> => {
     const seqBeforeRead = storageMutationSeq;
+    const readStartClock = ++storageOpClock;
     const webext = getWebExt();
     const rawPosts = webext?.storage?.local
         ? (((await webext.storage.local.get(STORAGE_KEYS.POSTS))[STORAGE_KEYS.POSTS] ||
@@ -353,6 +358,13 @@ const _getPosts = async (): Promise<Post[]> => {
         bumpLastPostUpdatedAt(post.updatedAt);
     }
     const nonEvicted = posts.filter((post) => !evictedPostIds.has(post.id));
+    if (readStartClock >= latestPostsReadStartClock) {
+        latestPostsReadStartClock = readStartClock;
+        presentPostIdsAtLatestRead.clear();
+        for (const post of nonEvicted) {
+            presentPostIdsAtLatestRead.add(post.id);
+        }
+    }
     if (storageMutationSeq === seqBeforeRead) {
         syncLatestPersistedPosts(nonEvicted);
     } else {
@@ -660,17 +672,24 @@ const localMutations = {
         return enqueueStorageOp(() => _savePosts(posts));
     },
 
-    async addPost(post: Post): Promise<Post> {
+    async addPost(post: Post, updates?: Partial<Post>): Promise<Post> {
         return enqueueStorageOp(async () => {
             const [posts, folders] = await Promise.all([_getPosts(), _getFolders()]);
-            const validFolderId =
-                post.folderId !== null && folders.some((f) => f.id === post.folderId)
-                    ? post.folderId
-                    : null;
             const existing = posts.find((p) => p.id === post.id);
+            const basePost = existing ? (updates ? { ...existing, ...updates } : existing) : post;
+            const requestedFolderId =
+                existing && updates
+                    ? 'folderId' in updates
+                        ? (updates.folderId ?? null)
+                        : existing.folderId
+                    : basePost.folderId;
+            const validFolderId =
+                requestedFolderId !== null && folders.some((f) => f.id === requestedFolderId)
+                    ? requestedFolderId
+                    : null;
             const minFloor = Math.max(post.updatedAt - 1, existing?.updatedAt ?? 0);
             const normalizedPost: Post = {
-                ...post,
+                ...basePost,
                 folderId: validFolderId,
                 updatedAt: nextPostTimestamp(minFloor),
             };
@@ -885,57 +904,98 @@ const runMutation = async <M extends StorageMutationMethod>(
     args: Parameters<(typeof localMutations)[M]>,
 ): Promise<Awaited<ReturnType<(typeof localMutations)[M]>>> => {
     const webext = getWebExt();
-    if (isEmbeddedFrame()) {
-        if (!webext?.runtime?.sendMessage) {
-            throw new Error('Background storage RPC unavailable');
-        }
-        const rpcResponse = (await webext.runtime.sendMessage({
-            type: STORAGE_RPC_TYPE,
-            method,
-            args,
-        } satisfies StorageRpcMessage)) as StorageRpcResponse | undefined;
-
-        if (!rpcResponse || typeof rpcResponse !== 'object' || !rpcResponse.__polypostStorageRpc) {
-            throw new Error('Background storage RPC unavailable');
-        }
-        if (!rpcResponse.ok) {
-            throw new Error(rpcResponse.error || 'Storage operation failed');
-        }
-        storageMutationSeq += 1;
-        if (
-            (method === 'addPost' || method === 'updatePost') &&
-            rpcResponse.value &&
-            typeof rpcResponse.value === 'object'
-        ) {
-            const post = rpcResponse.value as Post;
-            if (method === 'addPost') {
-                evictedPostIds.delete(post.id);
-            }
-            recordLatestPersistedPost(post);
-        } else if (method === 'deleteFolder' && Array.isArray(rpcResponse.value)) {
-            for (const post of rpcResponse.value as Post[]) {
-                recordLatestPersistedPost(post);
-            }
-        } else if (method === 'deletePost' && typeof args[0] === 'string') {
-            evictedPostIds.add(args[0]);
-            latestPersistedPostsById.delete(args[0]);
-        } else if (
-            method === 'deleteEmptyDraftIfUnmodified' &&
-            rpcResponse.value === true &&
-            typeof args[0] === 'string'
-        ) {
-            evictedPostIds.add(args[0]);
-            latestPersistedPostsById.delete(args[0]);
-        } else if (method === 'savePosts' && Array.isArray(args[0])) {
-            for (const post of args[0] as Post[]) {
-                recordLatestPersistedPost(post);
-            }
-        }
-        return rpcResponse.value as Awaited<ReturnType<(typeof localMutations)[M]>>;
+    const mutationStartClock = ++storageOpClock;
+    const pendingAddPostId =
+        method === 'addPost' && args[0] && typeof args[0] === 'object'
+            ? (args[0] as Post).id
+            : null;
+    if (pendingAddPostId) {
+        inFlightAddPostIds.add(pendingAddPostId);
     }
 
-    const fn = localMutations[method] as (...fnArgs: unknown[]) => Promise<unknown>;
-    return (await fn(...args)) as Awaited<ReturnType<(typeof localMutations)[M]>>;
+    try {
+        if (isEmbeddedFrame()) {
+            if (!webext?.runtime?.sendMessage) {
+                throw new Error('Background storage RPC unavailable');
+            }
+            const rpcResponse = (await webext.runtime.sendMessage({
+                type: STORAGE_RPC_TYPE,
+                method,
+                args,
+            } satisfies StorageRpcMessage)) as StorageRpcResponse | undefined;
+
+            if (
+                !rpcResponse ||
+                typeof rpcResponse !== 'object' ||
+                !rpcResponse.__polypostStorageRpc
+            ) {
+                throw new Error('Background storage RPC unavailable');
+            }
+            if (!rpcResponse.ok) {
+                throw new Error(rpcResponse.error || 'Storage operation failed');
+            }
+
+            const isProvenDeletedByLaterRead = (postId: string): boolean =>
+                mutationStartClock < latestPostsReadStartClock &&
+                !presentPostIdsAtLatestRead.has(postId) &&
+                !inFlightAddPostIds.has(postId);
+
+            storageMutationSeq += 1;
+            if (method === 'addPost' && rpcResponse.value && typeof rpcResponse.value === 'object') {
+                const post = rpcResponse.value as Post;
+                evictedPostIds.delete(post.id);
+                presentPostIdsAtLatestRead.add(post.id);
+                recordLatestPersistedPost(post);
+            } else if (
+                method === 'updatePost' &&
+                rpcResponse.value &&
+                typeof rpcResponse.value === 'object'
+            ) {
+                const post = rpcResponse.value as Post;
+                if (isProvenDeletedByLaterRead(post.id)) {
+                    latestPersistedPostsById.delete(post.id);
+                } else {
+                    recordLatestPersistedPost(post);
+                }
+            } else if (method === 'deleteFolder' && Array.isArray(rpcResponse.value)) {
+                for (const post of rpcResponse.value as Post[]) {
+                    if (isProvenDeletedByLaterRead(post.id)) {
+                        latestPersistedPostsById.delete(post.id);
+                    } else {
+                        recordLatestPersistedPost(post);
+                    }
+                }
+            } else if (method === 'deletePost' && typeof args[0] === 'string') {
+                evictedPostIds.add(args[0]);
+                presentPostIdsAtLatestRead.delete(args[0]);
+                latestPersistedPostsById.delete(args[0]);
+            } else if (
+                method === 'deleteEmptyDraftIfUnmodified' &&
+                rpcResponse.value === true &&
+                typeof args[0] === 'string'
+            ) {
+                evictedPostIds.add(args[0]);
+                presentPostIdsAtLatestRead.delete(args[0]);
+                latestPersistedPostsById.delete(args[0]);
+            } else if (method === 'savePosts' && Array.isArray(args[0])) {
+                for (const post of args[0] as Post[]) {
+                    if (isProvenDeletedByLaterRead(post.id)) {
+                        latestPersistedPostsById.delete(post.id);
+                    } else {
+                        recordLatestPersistedPost(post);
+                    }
+                }
+            }
+            return rpcResponse.value as Awaited<ReturnType<(typeof localMutations)[M]>>;
+        }
+
+        const fn = localMutations[method] as (...fnArgs: unknown[]) => Promise<unknown>;
+        return (await fn(...args)) as Awaited<ReturnType<(typeof localMutations)[M]>>;
+    } finally {
+        if (pendingAddPostId) {
+            inFlightAddPostIds.delete(pendingAddPostId);
+        }
+    }
 };
 
 export const handleStorageRpcMessage = (
@@ -1007,8 +1067,8 @@ export const storage = {
         return runMutation('savePosts', [posts]);
     },
 
-    async addPost(post: Post): Promise<Post> {
-        return runMutation('addPost', [post]);
+    async addPost(post: Post, updates?: Partial<Post>): Promise<Post> {
+        return runMutation('addPost', updates !== undefined ? [post, updates] : [post]);
     },
 
     async updatePost(id: string, updates: Partial<Post>): Promise<Post> {

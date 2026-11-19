@@ -9,8 +9,17 @@ import {
     isPromotingLocalDraft,
     markFolderDeleted,
     clearDeletedFolderMark,
+    isFolderDeleted,
+    syncNewlyCreatedDraftRevision,
 } from './postsStore';
 import { useUIStore } from './uiStore';
+
+let folderMutationSeq = 0;
+const folderWriteSeqById = new Map<string, number>();
+
+const recordFolderWrite = (id: string): void => {
+    folderWriteSeqById.set(id, ++folderMutationSeq);
+};
 
 interface FoldersState {
     folders: Folder[];
@@ -31,13 +40,39 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     isLoading: false,
 
     loadFolders: async () => {
+        const seqAtStart = folderMutationSeq;
         set({ isLoading: true });
         try {
             const folders = await storage.getFolders();
-            for (const folder of folders) {
-                clearDeletedFolderMark(folder.id);
-            }
-            set({ folders, isLoading: false });
+            set((state) => {
+                const existingById = new Map(state.folders.map((f) => [f.id, f]));
+                const loadedIds = new Set<string>();
+                const mergedFolders: Folder[] = [];
+
+                for (const folder of folders) {
+                    if (isFolderDeleted(folder.id)) {
+                        continue;
+                    }
+                    loadedIds.add(folder.id);
+                    const existing = existingById.get(folder.id);
+                    if (existing && (folderWriteSeqById.get(folder.id) ?? 0) > seqAtStart) {
+                        mergedFolders.push(existing);
+                    } else {
+                        mergedFolders.push(folder);
+                    }
+                }
+
+                for (const current of state.folders) {
+                    if (loadedIds.has(current.id) || isFolderDeleted(current.id)) {
+                        continue;
+                    }
+                    if ((folderWriteSeqById.get(current.id) ?? 0) > seqAtStart) {
+                        mergedFolders.push(current);
+                    }
+                }
+
+                return { folders: mergedFolders, isLoading: false };
+            });
         } catch (error) {
             console.error('Failed to load folders:', error);
             set({ isLoading: false });
@@ -58,12 +93,14 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
         };
 
         clearDeletedFolderMark(folder.id);
+        recordFolderWrite(folder.id);
         await storage.addFolder(folder);
         set((state) => ({ folders: [...state.folders, folder] }));
         return folder;
     },
 
     updateFolder: async (id: string, updates: Partial<Folder>) => {
+        recordFolderWrite(id);
         await storage.updateFolder(id, updates);
         set((state) => ({
             folders: state.folders.map((f) =>
@@ -73,8 +110,9 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     },
 
     deleteFolder: async (id: string) => {
-        const storedPosts = await storage.deleteFolder(id);
         markFolderDeleted(id);
+        recordFolderWrite(id);
+        const storedPosts = await storage.deleteFolder(id);
         const storedPostById = new Map(storedPosts.map((p) => [p.id, p]));
         set((state) => ({
             folders: state.folders.filter((f) => f.id !== id),
@@ -94,6 +132,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
                     };
                 }
 
+                syncNewlyCreatedDraftRevision(nextPost);
                 if (
                     nextNewlyCreatedDraft?.id === nextPost.id &&
                     nextPost.status === 'draft' &&
