@@ -305,6 +305,19 @@ const normalizeStoredPost = (post: Post): Post => ({
     status: post.status === 'posted' ? 'posted' : 'draft',
 });
 
+const latestPersistedPostsById = new Map<string, Post>();
+
+const syncLatestPersistedPosts = (posts: Post[]): void => {
+    latestPersistedPostsById.clear();
+    for (const post of posts) {
+        latestPersistedPostsById.set(post.id, post);
+    }
+};
+
+export const getLatestPersistedPost = (id: string): Post | undefined => {
+    return latestPersistedPostsById.get(id);
+};
+
 const _getPosts = async (): Promise<Post[]> => {
     const webext = getWebExt();
     const rawPosts = webext?.storage?.local
@@ -315,10 +328,12 @@ const _getPosts = async (): Promise<Post[]> => {
     for (const post of posts) {
         bumpLastPostUpdatedAt(post.updatedAt);
     }
+    syncLatestPersistedPosts(posts);
     return posts;
 };
 
 const _savePosts = async (posts: Post[]): Promise<void> => {
+    syncLatestPersistedPosts(posts);
     const webext = getWebExt();
     if (webext?.storage?.local) {
         await webext.storage.local.set({ [STORAGE_KEYS.POSTS]: posts });
@@ -656,6 +671,7 @@ const localMutations = {
             const [posts, variants] = await Promise.all([_getPosts(), _getVariants()]);
             const filtered = posts.filter((p) => p.id !== id);
             const filteredVariants = variants.filter((v) => v.postId !== id);
+            syncLatestPersistedPosts(filtered);
             const webext = getWebExt();
             if (webext?.storage?.local) {
                 await webext.storage.local.set({
@@ -756,7 +772,7 @@ const localMutations = {
         });
     },
 
-    async deleteFolder(id: string): Promise<void> {
+    async deleteFolder(id: string): Promise<Post[]> {
         return enqueueStorageOp(async () => {
             const [folders, posts] = await Promise.all([_getFolders(), _getPosts()]);
             const filtered = folders.filter((f) => f.id !== id);
@@ -765,17 +781,19 @@ const localMutations = {
                     ? { ...p, folderId: null, updatedAt: nextPostTimestamp(p.updatedAt) }
                     : p,
             );
+            syncLatestPersistedPosts(updatedPosts);
             const webext = getWebExt();
             if (webext?.storage?.local) {
                 await webext.storage.local.set({
                     [STORAGE_KEYS.FOLDERS]: filtered,
                     [STORAGE_KEYS.POSTS]: updatedPosts,
                 });
-                return;
+                return updatedPosts;
             }
 
             writeLocal(STORAGE_KEYS.FOLDERS, filtered);
             writeLocal(STORAGE_KEYS.POSTS, updatedPosts);
+            return updatedPosts;
         });
     },
 
@@ -969,7 +987,7 @@ export const storage = {
         return runMutation('updateFolder', [id, updates]);
     },
 
-    async deleteFolder(id: string): Promise<void> {
+    async deleteFolder(id: string): Promise<Post[]> {
         return runMutation('deleteFolder', [id]);
     },
 

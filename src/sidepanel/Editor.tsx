@@ -33,12 +33,14 @@ interface EditorProps {
 let sharedSaveChain: Promise<void> = Promise.resolve();
 let sharedInFlightSaveCount = 0;
 let sharedEditVersion = 0;
+let sharedQueueTicket = 0;
 const committedContentByPost = new Map<string, string>();
 const committedVersionByPost = new Map<string, number>();
 const pendingPublishByPost = new Map<string, boolean>();
 const publishVersionByPost = new Map<string, number>();
 const latestQueuedContentByPost = new Map<string, string>();
 const latestQueuedVersionByPost = new Map<string, number>();
+const latestQueuedTicketByPost = new Map<string, number>();
 const mountedEditorSyncListeners = new Set<(postId: string) => void>();
 
 const notifyMountedEditors = (postId: string): void => {
@@ -52,6 +54,7 @@ const pruneSupersededQueuedSource = (postId: string, committedVersion: number): 
     if (queuedVersion !== undefined && queuedVersion <= committedVersion) {
         latestQueuedVersionByPost.delete(postId);
         latestQueuedContentByPost.delete(postId);
+        latestQueuedTicketByPost.delete(postId);
     }
 };
 
@@ -147,7 +150,11 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             const committed = committedContentByPost.get(targetPostId);
             const committedVersion = committedVersionByPost.get(targetPostId) ?? -1;
             const isStaleSourceVersion =
-                versionAtCall !== undefined && versionAtCall < committedVersion;
+                versionAtCall !== undefined &&
+                (versionAtCall < committedVersion ||
+                    (versionAtCall === committedVersion &&
+                        committed !== undefined &&
+                        sourceContent !== committed));
             const needSource =
                 checkSourceDirty &&
                 !isStaleSourceVersion &&
@@ -239,6 +246,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         }) => {
             const { targetPostId, sourceContent, checkSourceDirty = true, versionAtCall } = options;
 
+            const queueTicket = ++sharedQueueTicket;
             const queuedVersion = versionAtCall ?? sharedEditVersion;
             const committedVersion = committedVersionByPost.get(targetPostId) ?? -1;
             const currentQueuedVersion = latestQueuedVersionByPost.get(targetPostId) ?? -1;
@@ -249,6 +257,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             if (trackedAsLatest) {
                 latestQueuedContentByPost.set(targetPostId, sourceContent);
                 latestQueuedVersionByPost.set(targetPostId, queuedVersion);
+                latestQueuedTicketByPost.set(targetPostId, queueTicket);
             }
 
             return enqueueEditorSave(async () => {
@@ -257,8 +266,9 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 } finally {
                     if (
                         trackedAsLatest &&
-                        latestQueuedVersionByPost.get(targetPostId) === queuedVersion
+                        latestQueuedTicketByPost.get(targetPostId) === queueTicket
                     ) {
+                        latestQueuedTicketByPost.delete(targetPostId);
                         latestQueuedVersionByPost.delete(targetPostId);
                         latestQueuedContentByPost.delete(targetPostId);
                     }
@@ -326,7 +336,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             const initialDirty = initialContent !== post.sourceContent;
             const initialVersion = hasNewerQueuedSource
                 ? queuedVersion
-                : Math.max(committedVersion, sharedEditVersion);
+                : Math.max(committedVersion, 0);
             editVersionRef.current = initialVersion;
             mountEditVersionRef.current = initialVersion;
             contentRef.current = initialContent;
@@ -379,6 +389,13 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 !hasUnsavedChangesRef.current &&
                 editVersionRef.current === mountEditVersionRef.current
             ) {
+                contentRef.current = committed;
+                setContent(committed);
+                if (committedVer >= 0) {
+                    editVersionRef.current = Math.max(editVersionRef.current, committedVer);
+                    mountEditVersionRef.current = editVersionRef.current;
+                }
+            } else if (editVersionRef.current === mountEditVersionRef.current) {
                 hasUnsavedChangesRef.current = true;
                 setHasUnsavedChanges(true);
             }

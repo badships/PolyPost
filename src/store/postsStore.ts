@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Post, PostStatus, LibraryFilter, Variant } from '@/types';
-import { storage, nextPostTimestamp } from '@/services/storage';
+import { storage, nextPostTimestamp, getLatestPersistedPost } from '@/services/storage';
 import { generateId } from '@/utils';
 
 interface PostsState {
@@ -35,6 +35,8 @@ interface PostsState {
 const localBlankDraftIds = new Set<string>();
 const pendingLocalPromotions = new Map<string, Promise<void>>();
 
+export const isPromotingLocalDraft = (id: string): boolean => pendingLocalPromotions.has(id);
+
 export const nextLocalPostTimestamp = (minFloor = 0): number => {
     return nextPostTimestamp(minFloor);
 };
@@ -68,21 +70,10 @@ export const usePostsStore = create<PostsState>((set, get) => {
             : localDraft;
 
         const promotionPromise = storage.addPost(toPersist).then((savedPost) => {
+            const authoritativePost = getLatestPersistedPost(id) ?? savedPost;
             localBlankDraftIds.delete(id);
             set((state) => ({
-                posts: state.posts.map((p) => {
-                    if (p.id !== id) {
-                        return p;
-                    }
-                    if (p.updatedAt > savedPost.updatedAt) {
-                        return {
-                            ...savedPost,
-                            folderId: p.folderId === null ? null : savedPost.folderId,
-                            updatedAt: p.updatedAt,
-                        };
-                    }
-                    return savedPost;
-                }),
+                posts: state.posts.map((p) => (p.id === id ? authoritativePost : p)),
                 newlyCreatedDraft:
                     state.newlyCreatedDraft?.id === id ? null : state.newlyCreatedDraft,
             }));
@@ -157,16 +148,27 @@ export const usePostsStore = create<PostsState>((set, get) => {
                 // so another panel cannot open or edit an uncommitted blank draft.
                 localBlankDraftIds.add(post.id);
             } else {
-                persistedPost = await storage.addPost(post);
+                const savedPost = await storage.addPost(post);
+                persistedPost = getLatestPersistedPost(post.id) ?? savedPost;
             }
 
-            set((state) => ({
-                posts: [...state.posts, persistedPost],
-                newlyCreatedDraft: isBlankDraft
-                    ? { id: persistedPost.id, updatedAt: persistedPost.updatedAt }
-                    : state.newlyCreatedDraft,
-            }));
-            return persistedPost;
+            set((state) => {
+                const latestPost = isBlankDraft
+                    ? persistedPost
+                    : (getLatestPersistedPost(persistedPost.id) ?? persistedPost);
+                const exists = state.posts.some((p) => p.id === latestPost.id);
+                return {
+                    posts: exists
+                        ? state.posts.map((p) => (p.id === latestPost.id ? latestPost : p))
+                        : [...state.posts, latestPost],
+                    newlyCreatedDraft: isBlankDraft
+                        ? { id: latestPost.id, updatedAt: latestPost.updatedAt }
+                        : state.newlyCreatedDraft,
+                };
+            });
+            return isBlankDraft
+                ? persistedPost
+                : (getLatestPersistedPost(persistedPost.id) ?? persistedPost);
         },
 
         updatePost: async (id: string, updates: Partial<Post>) => {
