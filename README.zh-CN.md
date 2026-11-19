@@ -9,7 +9,7 @@ PolyPost 是一个基于 WebExtension（Manifest V3）的浏览器扩展，帮�
 
 - 生成 / 润色 / 翻译社媒内容（多语言）
 - 主应用界面（Dashboard / Editor / Settings）
-- 自定义润色提示词模板（Prompts），内置 9 家主流 AI 提供商（OpenAI、Anthropic Claude、Google Gemini、xAI Grok、DeepSeek、通义千问 Qwen、Kimi、智谱 GLM、OpenRouter）及对应模型预设
+- 内置精选润色提示词模板，以及 9 家主流 AI 提供商（OpenAI、Anthropic Claude、Google Gemini、xAI Grok、DeepSeek、通义千问 Qwen、Kimi、智谱 GLM、OpenRouter）及对应模型预设
 - 支持保存多个自定义渠道（Custom），兼容 OpenAI (`/v1/chat/completions`) 与 Anthropic (`/v1/messages`) 双协议格式
 - 快速翻译工具（Quick Translate），用于临时翻译回复且不创建草稿/帖子
 - X/Twitter 粉丝与关注列表页内过滤（Follower Filter），支持 `/followers`、`/verified_followers`、`/following` 页面（互关/未回关/认证状态筛选）
@@ -24,7 +24,7 @@ PolyPost 是一个基于 WebExtension（Manifest V3）的浏览器扩展，帮�
 ## 项目结构
 
 - `src/background/`：Service Worker / 后台脚本入口
-- `src/sidepanel/`：主应用 UI（Dashboard、Editor、Settings、Prompts、Quick Translate、Follower Filter）
+- `src/sidepanel/`：主应用 UI（Dashboard、Editor、Settings、Quick Translate、Follower Filter）
 - `src/content/`：X/Twitter 内容脚本（`followersFilter.ts`、`floatingAppHost.ts`）
 - `src/components/`：共享 UI、布局、内容库与编辑器组件
 - `src/services/`：OpenAI、WebExtension 存储、权限检查、代理请求、提示词与 Twitter Web Intent 工具

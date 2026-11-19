@@ -21,6 +21,21 @@ import {
 
 export const DEFAULT_CUSTOM_PROVIDER_ID = 'custom_default';
 
+const sanitizeApiSecret = (value?: string | null): string => {
+    if (typeof value !== 'string') {
+        return '';
+    }
+    let result = '';
+    for (const ch of value) {
+        const code = ch.charCodeAt(0);
+        if ((code >= 0x00 && code <= 0x1f) || code === 0x7f) {
+            continue;
+        }
+        result += ch;
+    }
+    return result.trim();
+};
+
 export const buildDefaultPrompts = (): PolishPrompt[] => {
     return Object.entries(POLISH_PROMPTS).map(([key, content]) => ({
         id: key,
@@ -92,18 +107,15 @@ export const normalizeSettings = (settings?: Partial<Settings> | null): Settings
     for (const id of BUILTIN_PROVIDER_IDS) {
         const rawCfg = settings?.providerConfigs?.[id];
         providerConfigs[id] = {
-            apiKey: typeof rawCfg?.apiKey === 'string' ? rawCfg.apiKey : '',
+            apiKey: sanitizeApiSecret(rawCfg?.apiKey),
             modelName: normalizeModelNameForProvider(id, rawCfg?.modelName),
         };
     }
 
     // Legacy migration from v1.3.x top-level OpenAI fields
-    if (
-        typeof settings?.openaiApiKey === 'string' &&
-        settings.openaiApiKey &&
-        !providerConfigs.openai.apiKey
-    ) {
-        providerConfigs.openai.apiKey = settings.openaiApiKey;
+    const legacyOpenAiKey = sanitizeApiSecret(settings?.openaiApiKey);
+    if (legacyOpenAiKey && !providerConfigs.openai.apiKey) {
+        providerConfigs.openai.apiKey = legacyOpenAiKey;
     }
     if (
         (settings?.provider === undefined || settings?.provider === 'openai') &&
@@ -134,7 +146,7 @@ export const normalizeSettings = (settings?: Partial<Settings> | null): Settings
                         : `Custom ${index + 1}`,
                 apiFormat: entry?.apiFormat === 'anthropic' ? 'anthropic' : 'openai',
                 baseUrl: typeof entry?.baseUrl === 'string' ? entry.baseUrl : '',
-                apiKey: typeof entry?.apiKey === 'string' ? entry.apiKey : '',
+                apiKey: sanitizeApiSecret(entry?.apiKey),
                 modelName: normalizeModelName(entry?.modelName),
             };
         });
@@ -145,7 +157,7 @@ export const normalizeSettings = (settings?: Partial<Settings> | null): Settings
                 name: 'Custom 1',
                 apiFormat: 'openai',
                 baseUrl: typeof settings?.customApiUrl === 'string' ? settings.customApiUrl : '',
-                apiKey: typeof settings?.customApiKey === 'string' ? settings.customApiKey : '',
+                apiKey: sanitizeApiSecret(settings?.customApiKey),
                 modelName:
                     settings?.provider === 'custom'
                         ? normalizeModelName(settings?.modelName)
@@ -214,7 +226,7 @@ export const resolveActiveProviderConfig = (
             isCustom: true,
             apiFormat: activeCustom?.apiFormat === 'anthropic' ? 'anthropic' : 'openai',
             baseUrl: (activeCustom?.baseUrl ?? settings.customApiUrl ?? '').trim(),
-            apiKey: (activeCustom?.apiKey ?? settings.customApiKey ?? '').trim(),
+            apiKey: sanitizeApiSecret(activeCustom?.apiKey ?? settings.customApiKey),
             modelName: normalizeModelName(activeCustom?.modelName ?? settings.modelName),
         };
     }
@@ -232,7 +244,7 @@ export const resolveActiveProviderConfig = (
         isCustom: false,
         apiFormat: def.apiFormat,
         baseUrl: def.baseUrl,
-        apiKey: (cfg?.apiKey ?? fallbackApiKey ?? '').trim(),
+        apiKey: sanitizeApiSecret(cfg?.apiKey ?? fallbackApiKey),
         modelName: normalizeModelNameForProvider(providerId, cfg?.modelName ?? fallbackModelName),
     };
 };

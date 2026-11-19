@@ -9,7 +9,7 @@ One codebase builds extensions for Chrome, Firefox, and Safari.
 
 - Generate, polish, and translate social content (multi-language)
 - Main app UI (Dashboard / Editor / Settings)
-- Customizable polish prompt templates (`Prompts`) and configurable model selection across 9 built-in AI providers (OpenAI, Anthropic Claude, Google Gemini, xAI Grok, DeepSeek, Qwen, Kimi, Zhipu GLM, OpenRouter)
+- Curated polish prompt templates and configurable model selection across 9 built-in AI providers (OpenAI, Anthropic Claude, Google Gemini, xAI Grok, DeepSeek, Qwen, Kimi, Zhipu GLM, OpenRouter)
 - Multi-channel Custom Providers supporting both OpenAI-compatible (`/v1/chat/completions`) and Anthropic-compatible (`/v1/messages`) formats
 - Quick Translate tool for one-off reply translation without creating posts
 - In-page X/Twitter Follower Filter for `/followers`, `/verified_followers`, and `/following` lists (mutuals, non-followers, verified/unverified)
@@ -24,7 +24,7 @@ One codebase builds extensions for Chrome, Firefox, and Safari.
 ## Project Structure
 
 - `src/background/`: Service worker / background script entry
-- `src/sidepanel/`: Main app UI (Dashboard, Editor, Settings, Prompts, Quick Translate, Follower Filter)
+- `src/sidepanel/`: Main app UI (Dashboard, Editor, Settings, Quick Translate, Follower Filter)
 - `src/content/`: X/Twitter content scripts (`followersFilter.ts`, `floatingAppHost.ts`)
 - `src/components/`: Shared UI, layout, library, and editor components
 - `src/services/`: OpenAI, WebExtension storage, permissions, proxy fetch, prompts, and Twitter intent helpers

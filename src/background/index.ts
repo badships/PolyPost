@@ -111,12 +111,39 @@ webext?.runtime?.onInstalled?.addListener((details) => {
 
 type ProxyFetchMessage = {
     type: 'proxyFetch';
+    requestId?: string;
     url: string;
     init?: {
         method?: string;
         headers?: Record<string, string>;
         body?: string;
+        deadlineAt?: number;
+        timeoutMs?: number;
     };
+};
+
+type ProxyFetchCancelMessage = {
+    type: 'proxyFetchCancel';
+    requestId: string;
+};
+
+const MAX_CANCELED_REQUEST_IDS = 200;
+const activeProxyControllers = new Map<
+    string,
+    { controller: AbortController; markAborted: () => void }
+>();
+const canceledRequestIds = new Set<string>();
+
+const recordCanceledRequestId = (requestId: string): void => {
+    if (canceledRequestIds.has(requestId)) {
+        canceledRequestIds.delete(requestId);
+    } else if (canceledRequestIds.size >= MAX_CANCELED_REQUEST_IDS) {
+        const oldest = canceledRequestIds.values().next().value;
+        if (oldest !== undefined) {
+            canceledRequestIds.delete(oldest);
+        }
+    }
+    canceledRequestIds.add(requestId);
 };
 
 const isProxyFetchMessage = (message: unknown): message is ProxyFetchMessage => {
@@ -128,17 +155,79 @@ const isProxyFetchMessage = (message: unknown): message is ProxyFetchMessage => 
     return candidate.type === 'proxyFetch' && typeof candidate.url === 'string';
 };
 
+const isProxyFetchCancelMessage = (message: unknown): message is ProxyFetchCancelMessage => {
+    if (!message || typeof message !== 'object') {
+        return false;
+    }
+
+    const candidate = message as ProxyFetchCancelMessage;
+    return (
+        candidate.type === 'proxyFetchCancel' &&
+        typeof candidate.requestId === 'string' &&
+        candidate.requestId.length > 0
+    );
+};
+
 webext?.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
     const rpcHandled = handleStorageRpcMessage(message, sender, sendResponse);
     if (rpcHandled !== undefined) {
         return rpcHandled;
     }
 
+    const extBaseUrl = webext?.runtime?.getURL?.('');
+    const isUnauthorizedSender = Boolean(
+        extBaseUrl && sender?.url && !sender.url.startsWith(extBaseUrl),
+    );
+
+    if (isProxyFetchCancelMessage(message)) {
+        if (isUnauthorizedSender) {
+            return false;
+        }
+        const active = activeProxyControllers.get(message.requestId);
+        if (active) {
+            active.markAborted();
+            active.controller.abort();
+            activeProxyControllers.delete(message.requestId);
+        } else {
+            recordCanceledRequestId(message.requestId);
+        }
+        return false;
+    }
+
     if (!isProxyFetchMessage(message)) {
         return undefined;
     }
 
+    if (isUnauthorizedSender) {
+        sendResponse({
+            ok: false,
+            status: 0,
+            statusText: 'Unauthorized sender',
+            headers: {},
+            body: '',
+        });
+        return false;
+    }
+
     const { url, init } = message;
+    const requestId =
+        typeof message.requestId === 'string' && message.requestId.length > 0
+            ? message.requestId
+            : undefined;
+
+    if (requestId && canceledRequestIds.has(requestId)) {
+        canceledRequestIds.delete(requestId);
+        sendResponse({
+            ok: false,
+            status: 0,
+            statusText: 'Aborted',
+            aborted: true,
+            headers: {},
+            body: '',
+        });
+        return false;
+    }
+
     if (!/^https?:\/\//i.test(url)) {
         sendResponse({
             ok: false,
@@ -150,10 +239,60 @@ webext?.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
         return false;
     }
 
+    const deadlineAt =
+        typeof init?.deadlineAt === 'number' && Number.isFinite(init.deadlineAt)
+            ? init.deadlineAt
+            : typeof init?.timeoutMs === 'number' &&
+                Number.isFinite(init.timeoutMs) &&
+                init.timeoutMs > 0
+              ? Date.now() + init.timeoutMs
+              : undefined;
+
+    if (deadlineAt !== undefined && deadlineAt <= Date.now()) {
+        sendResponse({
+            ok: false,
+            status: 0,
+            statusText: 'Request timed out',
+            timedOut: true,
+            headers: {},
+            body: '',
+        });
+        return false;
+    }
+
+    const controller = new AbortController();
+    let timedOut = false;
+    let abortedByCaller = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    if (deadlineAt !== undefined) {
+        timeoutId = setTimeout(
+            () => {
+                timedOut = true;
+                controller.abort();
+            },
+            Math.max(1, deadlineAt - Date.now()),
+        );
+    }
+
+    const activeEntry = requestId
+        ? {
+              controller,
+              markAborted: () => {
+                  abortedByCaller = true;
+              },
+          }
+        : undefined;
+    if (requestId && activeEntry) {
+        activeProxyControllers.set(requestId, activeEntry);
+    }
+
     const requestInit: RequestInit = {
         method: init?.method,
         headers: init?.headers,
         body: init?.body,
+        redirect: 'error',
+        signal: controller.signal,
     };
 
     fetch(url, requestInit)
@@ -176,10 +315,26 @@ webext?.runtime?.onMessage?.addListener((message, sender, sendResponse) => {
             sendResponse({
                 ok: false,
                 status: 0,
-                statusText: error instanceof Error ? error.message : 'Network error',
+                statusText: timedOut
+                    ? 'Request timed out'
+                    : abortedByCaller
+                      ? 'Aborted'
+                      : error instanceof Error
+                        ? error.message
+                        : 'Network error',
+                ...(timedOut ? { timedOut: true } : {}),
+                ...(abortedByCaller ? { aborted: true } : {}),
                 headers: {},
                 body: '',
             });
+        })
+        .finally(() => {
+            if (timeoutId !== undefined) {
+                clearTimeout(timeoutId);
+            }
+            if (requestId && activeProxyControllers.get(requestId) === activeEntry) {
+                activeProxyControllers.delete(requestId);
+            }
         });
 
     return true;

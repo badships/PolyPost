@@ -3,7 +3,13 @@ import type { Folder } from '@/types';
 import { storage } from '@/services/storage';
 import { generateId } from '@/utils';
 import { FOLDER_COLORS } from '@/types';
-import { usePostsStore } from './postsStore';
+import {
+    usePostsStore,
+    nextLocalPostTimestamp,
+    isPromotingLocalDraft,
+    markFolderDeleted,
+    clearDeletedFolderMark,
+} from './postsStore';
 import { useUIStore } from './uiStore';
 
 interface FoldersState {
@@ -28,6 +34,9 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
         set({ isLoading: true });
         try {
             const folders = await storage.getFolders();
+            for (const folder of folders) {
+                clearDeletedFolderMark(folder.id);
+            }
             set({ folders, isLoading: false });
         } catch (error) {
             console.error('Failed to load folders:', error);
@@ -48,6 +57,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
             updatedAt: Date.now(),
         };
 
+        clearDeletedFolderMark(folder.id);
         await storage.addFolder(folder);
         set((state) => ({ folders: [...state.folders, folder] }));
         return folder;
@@ -63,15 +73,45 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
     },
 
     deleteFolder: async (id: string) => {
-        await storage.deleteFolder(id);
+        const storedPosts = await storage.deleteFolder(id);
+        markFolderDeleted(id);
+        const storedPostById = new Map(storedPosts.map((p) => [p.id, p]));
         set((state) => ({
             folders: state.folders.filter((f) => f.id !== id),
         }));
-        usePostsStore.setState((state) => ({
-            posts: state.posts.map((p) =>
-                p.folderId === id ? { ...p, folderId: null, updatedAt: Date.now() } : p,
-            ),
-        }));
+        usePostsStore.setState((state) => {
+            let nextNewlyCreatedDraft = state.newlyCreatedDraft;
+            const nextPosts = state.posts.map((p) => {
+                const persisted = storedPostById.get(p.id);
+                let nextPost = p;
+                if (persisted) {
+                    nextPost = persisted.updatedAt > p.updatedAt ? persisted : p;
+                } else if (p.folderId === id && !isPromotingLocalDraft(p.id)) {
+                    nextPost = {
+                        ...p,
+                        folderId: null,
+                        updatedAt: nextLocalPostTimestamp(p.updatedAt),
+                    };
+                }
+
+                if (
+                    nextNewlyCreatedDraft?.id === nextPost.id &&
+                    nextPost.status === 'draft' &&
+                    !nextPost.sourceContent.trim()
+                ) {
+                    nextNewlyCreatedDraft = {
+                        id: nextPost.id,
+                        updatedAt: nextPost.updatedAt,
+                    };
+                }
+
+                return nextPost;
+            });
+            return {
+                posts: nextPosts,
+                newlyCreatedDraft: nextNewlyCreatedDraft,
+            };
+        });
         if (useUIStore.getState().selectedFolderId === id) {
             useUIStore.getState().setSelectedFolderId(null);
         }

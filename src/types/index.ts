@@ -159,7 +159,7 @@ export interface Settings {
 // ============================================
 export type ViewMode = 'grid' | 'list';
 export type LibraryFilter = 'all' | 'drafts' | 'posted';
-export type DashboardView = 'posts' | 'prompts' | 'translate' | 'followers';
+export type DashboardView = 'posts' | 'translate' | 'followers';
 
 export interface UIState {
     viewMode: ViewMode;

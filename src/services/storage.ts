@@ -1,10 +1,6 @@
-import type { Post, Variant, Folder, Settings, PolishPrompt } from '@/types';
+import type { Post, Variant, Folder, Settings } from '@/types';
 import { getWebExt } from '@/services/webext';
-import {
-    buildDefaultPrompts,
-    DEFAULT_SETTINGS,
-    normalizeSettings,
-} from '@/services/settingsDefaults';
+import { DEFAULT_SETTINGS, normalizeSettings } from '@/services/settingsDefaults';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -39,12 +35,14 @@ const STORAGE_LOCK_NAME = 'polypost_storage_lock';
 const STORAGE_RPC_TYPE = 'polypost:storage_rpc';
 const QUEUE_SYM = Symbol.for('polypost.storage.queue');
 const UPDATED_AT_SYM = Symbol.for('polypost.storage.lastUpdatedAt');
+const POST_UPDATED_AT_SYM = Symbol.for('polypost.storage.lastPostUpdatedAt');
 
 type StorageMutationMethod =
     | 'savePosts'
     | 'addPost'
     | 'updatePost'
     | 'deletePost'
+    | 'deleteEmptyDraftIfUnmodified'
     | 'saveVariants'
     | 'addVariant'
     | 'deleteVariant'
@@ -54,11 +52,7 @@ type StorageMutationMethod =
     | 'updateFolder'
     | 'deleteFolder'
     | 'saveSettings'
-    | 'updateSettings'
-    | 'addPrompt'
-    | 'updatePrompt'
-    | 'deletePrompt'
-    | 'resetPrompts';
+    | 'updateSettings';
 
 type StorageRpcMessage = {
     type: typeof STORAGE_RPC_TYPE;
@@ -76,6 +70,7 @@ type StorageRpcResponse = {
 interface SharedStorageState {
     [QUEUE_SYM]?: Promise<unknown>;
     [UPDATED_AT_SYM]?: number;
+    [POST_UPDATED_AT_SYM]?: number;
 }
 
 const fallbackSharedState: SharedStorageState = {};
@@ -90,6 +85,9 @@ const getSharedState = (): SharedStorageState => {
             if (typeof host[UPDATED_AT_SYM] !== 'number') {
                 host[UPDATED_AT_SYM] = 0;
             }
+            if (typeof host[POST_UPDATED_AT_SYM] !== 'number') {
+                host[POST_UPDATED_AT_SYM] = 0;
+            }
             if (!host[QUEUE_SYM]) {
                 host[QUEUE_SYM] = Promise.resolve();
             }
@@ -101,6 +99,9 @@ const getSharedState = (): SharedStorageState => {
 
     if (typeof fallbackSharedState[UPDATED_AT_SYM] !== 'number') {
         fallbackSharedState[UPDATED_AT_SYM] = 0;
+    }
+    if (typeof fallbackSharedState[POST_UPDATED_AT_SYM] !== 'number') {
+        fallbackSharedState[POST_UPDATED_AT_SYM] = 0;
     }
     if (!fallbackSharedState[QUEUE_SYM]) {
         fallbackSharedState[QUEUE_SYM] = Promise.resolve();
@@ -143,6 +144,21 @@ const nextSettingsTimestamp = (): number => {
     const shared = getSharedState();
     const next = Math.max(Date.now(), (shared[UPDATED_AT_SYM] ?? 0) + 1);
     shared[UPDATED_AT_SYM] = next;
+    return next;
+};
+
+export const bumpLastPostUpdatedAt = (timestamp?: number): void => {
+    if (typeof timestamp !== 'number') {
+        return;
+    }
+    const shared = getSharedState();
+    shared[POST_UPDATED_AT_SYM] = Math.max(shared[POST_UPDATED_AT_SYM] ?? 0, timestamp);
+};
+
+export const nextPostTimestamp = (minFloor = 0): number => {
+    const shared = getSharedState();
+    const next = Math.max(Date.now(), (shared[POST_UPDATED_AT_SYM] ?? 0) + 1, minFloor + 1);
+    shared[POST_UPDATED_AT_SYM] = next;
     return next;
 };
 
@@ -289,25 +305,76 @@ const normalizeStoredPost = (post: Post): Post => ({
     status: post.status === 'posted' ? 'posted' : 'draft',
 });
 
-const _getPosts = async (): Promise<Post[]> => {
-    const webext = getWebExt();
-    if (webext?.storage?.local) {
-        const result = await webext.storage.local.get(STORAGE_KEYS.POSTS);
-        const posts = (result[STORAGE_KEYS.POSTS] || []) as Post[];
-        return posts.map(normalizeStoredPost);
-    }
+const latestPersistedPostsById = new Map<string, Post>();
+const evictedPostIds = new Set<string>();
+let storageMutationSeq = 0;
 
-    return readLocal<Post[]>(STORAGE_KEYS.POSTS, []).map(normalizeStoredPost);
+export const isPostEvicted = (id: string): boolean => evictedPostIds.has(id);
+
+export const recordLatestPersistedPost = (post: Post): Post => {
+    const normalized = normalizeStoredPost(post);
+    bumpLastPostUpdatedAt(normalized.updatedAt);
+    if (evictedPostIds.has(normalized.id)) {
+        return normalized;
+    }
+    const existing = latestPersistedPostsById.get(normalized.id);
+    if (!existing || normalized.updatedAt >= existing.updatedAt) {
+        latestPersistedPostsById.set(normalized.id, normalized);
+        return normalized;
+    }
+    return existing;
+};
+
+const syncLatestPersistedPosts = (posts: Post[]): void => {
+    const validIds = new Set(posts.map((post) => post.id));
+    for (const existingId of Array.from(latestPersistedPostsById.keys())) {
+        if (!validIds.has(existingId) || evictedPostIds.has(existingId)) {
+            latestPersistedPostsById.delete(existingId);
+        }
+    }
+    for (const post of posts) {
+        recordLatestPersistedPost(post);
+    }
+};
+
+export const getLatestPersistedPost = (id: string): Post | undefined => {
+    return latestPersistedPostsById.get(id);
+};
+
+const _getPosts = async (): Promise<Post[]> => {
+    const seqBeforeRead = storageMutationSeq;
+    const webext = getWebExt();
+    const rawPosts = webext?.storage?.local
+        ? (((await webext.storage.local.get(STORAGE_KEYS.POSTS))[STORAGE_KEYS.POSTS] ||
+              []) as Post[])
+        : readLocal<Post[]>(STORAGE_KEYS.POSTS, []);
+    const posts = rawPosts.map(normalizeStoredPost);
+    for (const post of posts) {
+        bumpLastPostUpdatedAt(post.updatedAt);
+    }
+    const nonEvicted = posts.filter((post) => !evictedPostIds.has(post.id));
+    if (storageMutationSeq === seqBeforeRead) {
+        syncLatestPersistedPosts(nonEvicted);
+    } else {
+        for (const post of nonEvicted) {
+            recordLatestPersistedPost(post);
+        }
+    }
+    return posts;
 };
 
 const _savePosts = async (posts: Post[]): Promise<void> => {
     const webext = getWebExt();
     if (webext?.storage?.local) {
         await webext.storage.local.set({ [STORAGE_KEYS.POSTS]: posts });
+        storageMutationSeq += 1;
+        syncLatestPersistedPosts(posts);
         return;
     }
 
     writeLocal(STORAGE_KEYS.POSTS, posts);
+    storageMutationSeq += 1;
+    syncLatestPersistedPosts(posts);
 };
 
 const _getVariants = async (): Promise<Variant[]> => {
@@ -593,25 +660,51 @@ const localMutations = {
         return enqueueStorageOp(() => _savePosts(posts));
     },
 
-    async addPost(post: Post): Promise<void> {
+    async addPost(post: Post): Promise<Post> {
         return enqueueStorageOp(async () => {
-            const posts = await _getPosts();
-            const exists = posts.some((p) => p.id === post.id);
-            const nextPosts = exists
-                ? posts.map((p) => (p.id === post.id ? post : p))
-                : [...posts, post];
+            const [posts, folders] = await Promise.all([_getPosts(), _getFolders()]);
+            const validFolderId =
+                post.folderId !== null && folders.some((f) => f.id === post.folderId)
+                    ? post.folderId
+                    : null;
+            const existing = posts.find((p) => p.id === post.id);
+            const minFloor = Math.max(post.updatedAt - 1, existing?.updatedAt ?? 0);
+            const normalizedPost: Post = {
+                ...post,
+                folderId: validFolderId,
+                updatedAt: nextPostTimestamp(minFloor),
+            };
+            const nextPosts = existing
+                ? posts.map((p) => (p.id === post.id ? normalizedPost : p))
+                : [...posts, normalizedPost];
+            evictedPostIds.delete(normalizedPost.id);
             await _savePosts(nextPosts);
+            return normalizedPost;
         });
     },
 
-    async updatePost(id: string, updates: Partial<Post>): Promise<void> {
+    async updatePost(id: string, updates: Partial<Post>): Promise<Post> {
         return enqueueStorageOp(async () => {
-            const posts = await _getPosts();
+            const [posts, folders] = await Promise.all([_getPosts(), _getFolders()]);
             const index = posts.findIndex((p) => p.id === id);
-            if (index !== -1) {
-                posts[index] = { ...posts[index], ...updates, updatedAt: Date.now() };
-                await _savePosts(posts);
+            if (index === -1) {
+                throw new Error('Post no longer exists');
             }
+            const requestedFolderId =
+                'folderId' in updates ? (updates.folderId ?? null) : posts[index].folderId;
+            const validFolderId =
+                requestedFolderId !== null && folders.some((f) => f.id === requestedFolderId)
+                    ? requestedFolderId
+                    : null;
+            const nextPost: Post = {
+                ...posts[index],
+                ...updates,
+                folderId: validFolderId,
+                updatedAt: nextPostTimestamp(posts[index].updatedAt),
+            };
+            posts[index] = nextPost;
+            await _savePosts(posts);
+            return nextPost;
         });
     },
 
@@ -626,11 +719,39 @@ const localMutations = {
                     [STORAGE_KEYS.POSTS]: filtered,
                     [STORAGE_KEYS.VARIANTS]: filteredVariants,
                 });
-                return;
+            } else {
+                writeLocal(STORAGE_KEYS.POSTS, filtered);
+                writeLocal(STORAGE_KEYS.VARIANTS, filteredVariants);
+            }
+            storageMutationSeq += 1;
+            evictedPostIds.add(id);
+            syncLatestPersistedPosts(filtered);
+        });
+    },
+
+    async deleteEmptyDraftIfUnmodified(id: string, expectedUpdatedAt: number): Promise<boolean> {
+        return enqueueStorageOp(async () => {
+            const [posts, variants] = await Promise.all([_getPosts(), _getVariants()]);
+            const target = posts.find((p) => p.id === id);
+            if (!target) {
+                return false;
+            }
+            const hasVariants = variants.some((v) => v.postId === id);
+            if (
+                target.status !== 'draft' ||
+                target.updatedAt !== expectedUpdatedAt ||
+                target.sourceContent.trim().length > 0 ||
+                hasVariants
+            ) {
+                return false;
             }
 
-            writeLocal(STORAGE_KEYS.POSTS, filtered);
-            writeLocal(STORAGE_KEYS.VARIANTS, filteredVariants);
+            const filtered = posts.filter((p) => p.id !== id);
+            await _savePosts(filtered);
+            storageMutationSeq += 1;
+            evictedPostIds.add(id);
+            latestPersistedPostsById.delete(id);
+            return true;
         });
     },
 
@@ -640,7 +761,10 @@ const localMutations = {
 
     async addVariant(variant: Variant): Promise<void> {
         return enqueueStorageOp(async () => {
-            const variants = await _getVariants();
+            const [posts, variants] = await Promise.all([_getPosts(), _getVariants()]);
+            if (!posts.some((p) => p.id === variant.postId)) {
+                throw new Error('Post no longer exists');
+            }
             const exists = variants.some((v) => v.id === variant.id);
             const nextVariants = exists
                 ? variants.map((v) => (v.id === variant.id ? variant : v))
@@ -694,24 +818,35 @@ const localMutations = {
         });
     },
 
-    async deleteFolder(id: string): Promise<void> {
+    async deleteFolder(id: string): Promise<Post[]> {
         return enqueueStorageOp(async () => {
             const [folders, posts] = await Promise.all([_getFolders(), _getPosts()]);
             const filtered = folders.filter((f) => f.id !== id);
+            const shared = getSharedState();
+            const prevPostUpdatedAt = shared[POST_UPDATED_AT_SYM] ?? 0;
             const updatedPosts = posts.map((p) =>
-                p.folderId === id ? { ...p, folderId: null, updatedAt: Date.now() } : p,
+                p.folderId === id
+                    ? { ...p, folderId: null, updatedAt: nextPostTimestamp(p.updatedAt) }
+                    : p,
             );
             const webext = getWebExt();
-            if (webext?.storage?.local) {
-                await webext.storage.local.set({
-                    [STORAGE_KEYS.FOLDERS]: filtered,
-                    [STORAGE_KEYS.POSTS]: updatedPosts,
-                });
-                return;
+            try {
+                if (webext?.storage?.local) {
+                    await webext.storage.local.set({
+                        [STORAGE_KEYS.FOLDERS]: filtered,
+                        [STORAGE_KEYS.POSTS]: updatedPosts,
+                    });
+                } else {
+                    writeLocal(STORAGE_KEYS.FOLDERS, filtered);
+                    writeLocal(STORAGE_KEYS.POSTS, updatedPosts);
+                }
+            } catch (error) {
+                shared[POST_UPDATED_AT_SYM] = prevPostUpdatedAt;
+                throw error;
             }
-
-            writeLocal(STORAGE_KEYS.FOLDERS, filtered);
-            writeLocal(STORAGE_KEYS.POSTS, updatedPosts);
+            storageMutationSeq += 1;
+            syncLatestPersistedPosts(updatedPosts);
+            return updatedPosts;
         });
     },
 
@@ -737,73 +872,6 @@ const localMutations = {
     async updateSettings(updates: Partial<Settings>): Promise<Settings> {
         return enqueueStorageOp(async () => {
             return _commitSettingsPatch(() => ({ patch: updates }));
-        });
-    },
-
-    async addPrompt(prompt: PolishPrompt): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            return _commitSettingsPatch((current) => {
-                const exists = current.prompts.some((p) => p.id === prompt.id);
-                const nextPrompts = exists
-                    ? current.prompts.map((p) => (p.id === prompt.id ? prompt : p))
-                    : [...current.prompts, prompt];
-                return {
-                    patch: { prompts: nextPrompts },
-                };
-            });
-        });
-    },
-
-    async updatePrompt(updatedPrompt: PolishPrompt): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            return _commitSettingsPatch((current) => {
-                const exists = current.prompts.some((p) => p.id === updatedPrompt.id);
-                if (!exists) {
-                    throw new Error('Prompt no longer exists');
-                }
-                const nextPrompts = current.prompts.map((p) =>
-                    p.id === updatedPrompt.id ? updatedPrompt : p,
-                );
-                return {
-                    patch: { prompts: nextPrompts },
-                };
-            });
-        });
-    },
-
-    async deletePrompt(id: string): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            return _commitSettingsPatch((current) => {
-                if (current.prompts.length <= 1) {
-                    throw new Error('Cannot delete the last prompt');
-                }
-                const nextPrompts = current.prompts.filter((p) => p.id !== id);
-                const patch: Partial<Settings> = {
-                    prompts: nextPrompts,
-                };
-                if (current.defaultPolishTemplate === id) {
-                    patch.defaultPolishTemplate = nextPrompts[0]?.id || 'professional';
-                }
-                return { patch };
-            });
-        });
-    },
-
-    async resetPrompts(): Promise<Settings> {
-        return enqueueStorageOp(async () => {
-            return _commitSettingsPatch((current) => {
-                const defaultPrompts = buildDefaultPrompts();
-                const hasCurrentDefault = defaultPrompts.some(
-                    (p) => p.id === current.defaultPolishTemplate,
-                );
-                const patch: Partial<Settings> = {
-                    prompts: defaultPrompts,
-                };
-                if (!hasCurrentDefault) {
-                    patch.defaultPolishTemplate = defaultPrompts[0]?.id || 'professional';
-                }
-                return { patch };
-            });
         });
     },
 };
@@ -832,6 +900,36 @@ const runMutation = async <M extends StorageMutationMethod>(
         }
         if (!rpcResponse.ok) {
             throw new Error(rpcResponse.error || 'Storage operation failed');
+        }
+        storageMutationSeq += 1;
+        if (
+            (method === 'addPost' || method === 'updatePost') &&
+            rpcResponse.value &&
+            typeof rpcResponse.value === 'object'
+        ) {
+            const post = rpcResponse.value as Post;
+            if (method === 'addPost') {
+                evictedPostIds.delete(post.id);
+            }
+            recordLatestPersistedPost(post);
+        } else if (method === 'deleteFolder' && Array.isArray(rpcResponse.value)) {
+            for (const post of rpcResponse.value as Post[]) {
+                recordLatestPersistedPost(post);
+            }
+        } else if (method === 'deletePost' && typeof args[0] === 'string') {
+            evictedPostIds.add(args[0]);
+            latestPersistedPostsById.delete(args[0]);
+        } else if (
+            method === 'deleteEmptyDraftIfUnmodified' &&
+            rpcResponse.value === true &&
+            typeof args[0] === 'string'
+        ) {
+            evictedPostIds.add(args[0]);
+            latestPersistedPostsById.delete(args[0]);
+        } else if (method === 'savePosts' && Array.isArray(args[0])) {
+            for (const post of args[0] as Post[]) {
+                recordLatestPersistedPost(post);
+            }
         }
         return rpcResponse.value as Awaited<ReturnType<(typeof localMutations)[M]>>;
     }
@@ -909,16 +1007,20 @@ export const storage = {
         return runMutation('savePosts', [posts]);
     },
 
-    async addPost(post: Post): Promise<void> {
+    async addPost(post: Post): Promise<Post> {
         return runMutation('addPost', [post]);
     },
 
-    async updatePost(id: string, updates: Partial<Post>): Promise<void> {
+    async updatePost(id: string, updates: Partial<Post>): Promise<Post> {
         return runMutation('updatePost', [id, updates]);
     },
 
     async deletePost(id: string): Promise<void> {
         return runMutation('deletePost', [id]);
+    },
+
+    async deleteEmptyDraftIfUnmodified(id: string, expectedUpdatedAt: number): Promise<boolean> {
+        return runMutation('deleteEmptyDraftIfUnmodified', [id, expectedUpdatedAt]);
     },
 
     // ============================================
@@ -968,7 +1070,7 @@ export const storage = {
         return runMutation('updateFolder', [id, updates]);
     },
 
-    async deleteFolder(id: string): Promise<void> {
+    async deleteFolder(id: string): Promise<Post[]> {
         return runMutation('deleteFolder', [id]);
     },
 
@@ -985,21 +1087,5 @@ export const storage = {
 
     async updateSettings(updates: Partial<Settings>): Promise<Settings> {
         return runMutation('updateSettings', [updates]);
-    },
-
-    async addPrompt(prompt: PolishPrompt): Promise<Settings> {
-        return runMutation('addPrompt', [prompt]);
-    },
-
-    async updatePrompt(updatedPrompt: PolishPrompt): Promise<Settings> {
-        return runMutation('updatePrompt', [updatedPrompt]);
-    },
-
-    async deletePrompt(id: string): Promise<Settings> {
-        return runMutation('deletePrompt', [id]);
-    },
-
-    async resetPrompts(): Promise<Settings> {
-        return runMutation('resetPrompts', []);
     },
 };
