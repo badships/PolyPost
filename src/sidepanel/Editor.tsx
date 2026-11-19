@@ -203,6 +203,13 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 }
             } else if (isStaleSourceVersion) {
                 pruneSupersededQueuedSource(targetPostId, committedVersion);
+            } else if (checkSourceDirty && versionAtCall !== undefined) {
+                const nextCommittedVersion = Math.max(
+                    committedVersionByPost.get(targetPostId) ?? -1,
+                    versionAtCall,
+                );
+                committedVersionByPost.set(targetPostId, nextCommittedVersion);
+                pruneSupersededQueuedSource(targetPostId, nextCommittedVersion);
             }
             if (
                 needPosted &&
@@ -219,7 +226,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                     createdDraftRevisionRef.current = null;
                 }
                 if (
-                    needSource &&
+                    (needSource || (checkSourceDirty && !isStaleSourceVersion)) &&
                     versionAtCall !== undefined &&
                     editVersionRef.current === versionAtCall &&
                     sharedEditVersion === versionAtCall
@@ -269,8 +276,6 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                         latestQueuedTicketByPost.get(targetPostId) === queueTicket
                     ) {
                         latestQueuedTicketByPost.delete(targetPostId);
-                        latestQueuedVersionByPost.delete(targetPostId);
-                        latestQueuedContentByPost.delete(targetPostId);
                     }
                     notifyMountedEditors(targetPostId);
                 }
@@ -326,7 +331,6 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             const queuedVersion = latestQueuedVersionByPost.get(post.id);
             const committedVersion = committedVersionByPost.get(post.id) ?? -1;
             const hasNewerQueuedSource =
-                sharedInFlightSaveCount > 0 &&
                 queuedVersion !== undefined &&
                 queuedVersion > committedVersion &&
                 latestQueuedContentByPost.has(post.id);
@@ -346,12 +350,33 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
             setHasPendingPublishStatus(Boolean(pendingPublishByPost.get(post.id)));
         } else {
             setHasPendingPublishStatus(Boolean(pendingPublishByPost.get(post.id)));
+            if (createdDraftRevisionRef.current !== null) {
+                const createdDraft = usePostsStore.getState().newlyCreatedDraft;
+                createdDraftRevisionRef.current =
+                    createdDraft?.id === post.id &&
+                    createdDraft.updatedAt === post.updatedAt &&
+                    post.status === 'draft' &&
+                    !post.sourceContent.trim()
+                        ? post.updatedAt
+                        : null;
+            }
             if (sharedInFlightSaveCount === 0) {
                 committedContentByPost.set(post.id, post.sourceContent);
-                if (!hasUnsavedChangesRef.current && post.sourceContent !== contentRef.current) {
+                const queuedVersion = latestQueuedVersionByPost.get(post.id);
+                const committedVersion = committedVersionByPost.get(post.id) ?? -1;
+                const hasUncommittedQueuedSource =
+                    queuedVersion !== undefined &&
+                    queuedVersion > committedVersion &&
+                    latestQueuedContentByPost.has(post.id);
+                if (
+                    !hasUncommittedQueuedSource &&
+                    !hasUnsavedChangesRef.current &&
+                    post.sourceContent !== contentRef.current
+                ) {
                     contentRef.current = post.sourceContent;
                     setContent(post.sourceContent);
                 } else if (
+                    !hasUncommittedQueuedSource &&
                     hasUnsavedChangesRef.current &&
                     editVersionRef.current === mountEditVersionRef.current &&
                     post.sourceContent === contentRef.current
@@ -369,7 +394,7 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 return;
             }
             setHasPendingPublishStatus(Boolean(pendingPublishByPost.get(syncedPostId)));
-            if (latestQueuedVersionByPost.has(syncedPostId)) {
+            if (latestQueuedTicketByPost.has(syncedPostId)) {
                 return;
             }
             const committed = committedContentByPost.get(syncedPostId);
@@ -559,7 +584,11 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
         try {
             let discarded = false;
             await enqueueEditorSave(async () => {
-                const liveRevision = createdDraftRevisionRef.current;
+                const createdDraft = usePostsStore.getState().newlyCreatedDraft;
+                const liveRevision =
+                    createdDraftRevisionRef.current !== null && createdDraft?.id === targetPostId
+                        ? createdDraft.updatedAt
+                        : createdDraftRevisionRef.current;
                 const liveContent = contentRef.current;
                 const liveVariants = usePostsStore.getState().getVariantsByPostId(targetPostId);
                 const hasPendingPublish = Boolean(pendingPublishByPost.get(targetPostId));
@@ -572,6 +601,11 @@ export const Editor: React.FC<EditorProps> = ({ onNavigateBack, onNavigateToSett
                 ) {
                     discarded = await discardEmptyNewDraft(targetPostId, liveRevision);
                     if (discarded) {
+                        latestQueuedTicketByPost.delete(targetPostId);
+                        latestQueuedVersionByPost.delete(targetPostId);
+                        latestQueuedContentByPost.delete(targetPostId);
+                        committedContentByPost.delete(targetPostId);
+                        committedVersionByPost.delete(targetPostId);
                         if (loadedPostIdRef.current === targetPostId) {
                             createdDraftRevisionRef.current = null;
                             hasUnsavedChangesRef.current = false;

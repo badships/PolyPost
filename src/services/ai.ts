@@ -306,20 +306,17 @@ const isValidAnthropicProbeResponse = (data: unknown): boolean => {
     if (obj.error) {
         return false;
     }
-    if (Array.isArray(obj.content)) {
-        if (obj.type !== 'message' || obj.role !== 'assistant') {
-            return false;
-        }
-        if (obj.content.length > 0) {
-            return obj.content.every(isValidAnthropicContentBlock);
-        }
-        return obj.stop_reason === 'max_tokens';
-    }
     if (obj.type !== undefined && obj.type !== 'message') {
         return false;
     }
     if (obj.role !== undefined && obj.role !== 'assistant') {
         return false;
+    }
+    if (Array.isArray(obj.content)) {
+        if (obj.content.length > 0) {
+            return obj.content.every(isValidAnthropicContentBlock);
+        }
+        return obj.stop_reason === 'max_tokens';
     }
     return isValidOpenAIProbeResponse(data);
 };

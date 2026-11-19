@@ -306,10 +306,17 @@ const normalizeStoredPost = (post: Post): Post => ({
 });
 
 const latestPersistedPostsById = new Map<string, Post>();
+const evictedPostIds = new Set<string>();
+let storageMutationSeq = 0;
+
+export const isPostEvicted = (id: string): boolean => evictedPostIds.has(id);
 
 export const recordLatestPersistedPost = (post: Post): Post => {
     const normalized = normalizeStoredPost(post);
     bumpLastPostUpdatedAt(normalized.updatedAt);
+    if (evictedPostIds.has(normalized.id)) {
+        return normalized;
+    }
     const existing = latestPersistedPostsById.get(normalized.id);
     if (!existing || normalized.updatedAt >= existing.updatedAt) {
         latestPersistedPostsById.set(normalized.id, normalized);
@@ -319,9 +326,14 @@ export const recordLatestPersistedPost = (post: Post): Post => {
 };
 
 const syncLatestPersistedPosts = (posts: Post[]): void => {
-    latestPersistedPostsById.clear();
+    const validIds = new Set(posts.map((post) => post.id));
+    for (const existingId of Array.from(latestPersistedPostsById.keys())) {
+        if (!validIds.has(existingId) || evictedPostIds.has(existingId)) {
+            latestPersistedPostsById.delete(existingId);
+        }
+    }
     for (const post of posts) {
-        latestPersistedPostsById.set(post.id, post);
+        recordLatestPersistedPost(post);
     }
 };
 
@@ -330,6 +342,7 @@ export const getLatestPersistedPost = (id: string): Post | undefined => {
 };
 
 const _getPosts = async (): Promise<Post[]> => {
+    const seqBeforeRead = storageMutationSeq;
     const webext = getWebExt();
     const rawPosts = webext?.storage?.local
         ? (((await webext.storage.local.get(STORAGE_KEYS.POSTS))[STORAGE_KEYS.POSTS] ||
@@ -339,7 +352,14 @@ const _getPosts = async (): Promise<Post[]> => {
     for (const post of posts) {
         bumpLastPostUpdatedAt(post.updatedAt);
     }
-    syncLatestPersistedPosts(posts);
+    const nonEvicted = posts.filter((post) => !evictedPostIds.has(post.id));
+    if (storageMutationSeq === seqBeforeRead) {
+        syncLatestPersistedPosts(nonEvicted);
+    } else {
+        for (const post of nonEvicted) {
+            recordLatestPersistedPost(post);
+        }
+    }
     return posts;
 };
 
@@ -347,11 +367,13 @@ const _savePosts = async (posts: Post[]): Promise<void> => {
     const webext = getWebExt();
     if (webext?.storage?.local) {
         await webext.storage.local.set({ [STORAGE_KEYS.POSTS]: posts });
+        storageMutationSeq += 1;
         syncLatestPersistedPosts(posts);
         return;
     }
 
     writeLocal(STORAGE_KEYS.POSTS, posts);
+    storageMutationSeq += 1;
     syncLatestPersistedPosts(posts);
 };
 
@@ -655,6 +677,7 @@ const localMutations = {
             const nextPosts = existing
                 ? posts.map((p) => (p.id === post.id ? normalizedPost : p))
                 : [...posts, normalizedPost];
+            evictedPostIds.delete(normalizedPost.id);
             await _savePosts(nextPosts);
             return normalizedPost;
         });
@@ -662,14 +685,21 @@ const localMutations = {
 
     async updatePost(id: string, updates: Partial<Post>): Promise<Post> {
         return enqueueStorageOp(async () => {
-            const posts = await _getPosts();
+            const [posts, folders] = await Promise.all([_getPosts(), _getFolders()]);
             const index = posts.findIndex((p) => p.id === id);
             if (index === -1) {
                 throw new Error('Post no longer exists');
             }
+            const requestedFolderId =
+                'folderId' in updates ? (updates.folderId ?? null) : posts[index].folderId;
+            const validFolderId =
+                requestedFolderId !== null && folders.some((f) => f.id === requestedFolderId)
+                    ? requestedFolderId
+                    : null;
             const nextPost: Post = {
                 ...posts[index],
                 ...updates,
+                folderId: validFolderId,
                 updatedAt: nextPostTimestamp(posts[index].updatedAt),
             };
             posts[index] = nextPost;
@@ -689,12 +719,12 @@ const localMutations = {
                     [STORAGE_KEYS.POSTS]: filtered,
                     [STORAGE_KEYS.VARIANTS]: filteredVariants,
                 });
-                syncLatestPersistedPosts(filtered);
-                return;
+            } else {
+                writeLocal(STORAGE_KEYS.POSTS, filtered);
+                writeLocal(STORAGE_KEYS.VARIANTS, filteredVariants);
             }
-
-            writeLocal(STORAGE_KEYS.POSTS, filtered);
-            writeLocal(STORAGE_KEYS.VARIANTS, filteredVariants);
+            storageMutationSeq += 1;
+            evictedPostIds.add(id);
             syncLatestPersistedPosts(filtered);
         });
     },
@@ -718,6 +748,9 @@ const localMutations = {
 
             const filtered = posts.filter((p) => p.id !== id);
             await _savePosts(filtered);
+            storageMutationSeq += 1;
+            evictedPostIds.add(id);
+            latestPersistedPostsById.delete(id);
             return true;
         });
     },
@@ -811,6 +844,7 @@ const localMutations = {
                 shared[POST_UPDATED_AT_SYM] = prevPostUpdatedAt;
                 throw error;
             }
+            storageMutationSeq += 1;
             syncLatestPersistedPosts(updatedPosts);
             return updatedPosts;
         });
@@ -867,26 +901,35 @@ const runMutation = async <M extends StorageMutationMethod>(
         if (!rpcResponse.ok) {
             throw new Error(rpcResponse.error || 'Storage operation failed');
         }
+        storageMutationSeq += 1;
         if (
             (method === 'addPost' || method === 'updatePost') &&
             rpcResponse.value &&
             typeof rpcResponse.value === 'object'
         ) {
-            recordLatestPersistedPost(rpcResponse.value as Post);
+            const post = rpcResponse.value as Post;
+            if (method === 'addPost') {
+                evictedPostIds.delete(post.id);
+            }
+            recordLatestPersistedPost(post);
         } else if (method === 'deleteFolder' && Array.isArray(rpcResponse.value)) {
             for (const post of rpcResponse.value as Post[]) {
                 recordLatestPersistedPost(post);
             }
         } else if (method === 'deletePost' && typeof args[0] === 'string') {
+            evictedPostIds.add(args[0]);
             latestPersistedPostsById.delete(args[0]);
         } else if (
             method === 'deleteEmptyDraftIfUnmodified' &&
             rpcResponse.value === true &&
             typeof args[0] === 'string'
         ) {
+            evictedPostIds.add(args[0]);
             latestPersistedPostsById.delete(args[0]);
         } else if (method === 'savePosts' && Array.isArray(args[0])) {
-            syncLatestPersistedPosts(args[0] as Post[]);
+            for (const post of args[0] as Post[]) {
+                recordLatestPersistedPost(post);
+            }
         }
         return rpcResponse.value as Awaited<ReturnType<(typeof localMutations)[M]>>;
     }

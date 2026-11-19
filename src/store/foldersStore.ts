@@ -8,6 +8,7 @@ import {
     nextLocalPostTimestamp,
     isPromotingLocalDraft,
     markFolderDeleted,
+    clearDeletedFolderMark,
 } from './postsStore';
 import { useUIStore } from './uiStore';
 
@@ -33,6 +34,9 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
         set({ isLoading: true });
         try {
             const folders = await storage.getFolders();
+            for (const folder of folders) {
+                clearDeletedFolderMark(folder.id);
+            }
             set({ folders, isLoading: false });
         } catch (error) {
             console.error('Failed to load folders:', error);
@@ -53,6 +57,7 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
             updatedAt: Date.now(),
         };
 
+        clearDeletedFolderMark(folder.id);
         await storage.addFolder(folder);
         set((state) => ({ folders: [...state.folders, folder] }));
         return folder;
@@ -74,22 +79,39 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
         set((state) => ({
             folders: state.folders.filter((f) => f.id !== id),
         }));
-        usePostsStore.setState((state) => ({
-            posts: state.posts.map((p) => {
+        usePostsStore.setState((state) => {
+            let nextNewlyCreatedDraft = state.newlyCreatedDraft;
+            const nextPosts = state.posts.map((p) => {
                 const persisted = storedPostById.get(p.id);
+                let nextPost = p;
                 if (persisted) {
-                    return persisted.updatedAt > p.updatedAt ? persisted : p;
+                    nextPost = persisted.updatedAt > p.updatedAt ? persisted : p;
+                } else if (p.folderId === id && !isPromotingLocalDraft(p.id)) {
+                    nextPost = {
+                        ...p,
+                        folderId: null,
+                        updatedAt: nextLocalPostTimestamp(p.updatedAt),
+                    };
                 }
-                if (p.folderId !== id || isPromotingLocalDraft(p.id)) {
-                    return p;
+
+                if (
+                    nextNewlyCreatedDraft?.id === nextPost.id &&
+                    nextPost.status === 'draft' &&
+                    !nextPost.sourceContent.trim()
+                ) {
+                    nextNewlyCreatedDraft = {
+                        id: nextPost.id,
+                        updatedAt: nextPost.updatedAt,
+                    };
                 }
-                return {
-                    ...p,
-                    folderId: null,
-                    updatedAt: nextLocalPostTimestamp(p.updatedAt),
-                };
-            }),
-        }));
+
+                return nextPost;
+            });
+            return {
+                posts: nextPosts,
+                newlyCreatedDraft: nextNewlyCreatedDraft,
+            };
+        });
         if (useUIStore.getState().selectedFolderId === id) {
             useUIStore.getState().setSelectedFolderId(null);
         }
