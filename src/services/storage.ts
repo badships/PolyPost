@@ -687,7 +687,10 @@ const localMutations = {
 
     async addVariant(variant: Variant): Promise<void> {
         return enqueueStorageOp(async () => {
-            const variants = await _getVariants();
+            const [posts, variants] = await Promise.all([_getPosts(), _getVariants()]);
+            if (!posts.some((p) => p.id === variant.postId)) {
+                throw new Error('Post no longer exists');
+            }
             const exists = variants.some((v) => v.id === variant.id);
             const nextVariants = exists
                 ? variants.map((v) => (v.id === variant.id ? variant : v))

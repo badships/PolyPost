@@ -36,7 +36,7 @@ const localBlankDraftIds = new Set<string>();
 const pendingLocalPromotions = new Map<string, Promise<void>>();
 let lastLocalPostTimestamp = 0;
 
-const nextLocalPostTimestamp = (minFloor = 0): number => {
+export const nextLocalPostTimestamp = (minFloor = 0): number => {
     const next = Math.max(Date.now(), lastLocalPostTimestamp + 1, minFloor + 1);
     lastLocalPostTimestamp = next;
     return next;
@@ -275,6 +275,10 @@ export const usePostsStore = create<PostsState>((set, get) => {
         addVariant: async (variantData: Omit<Variant, 'id' | 'createdAt'>) => {
             await promoteLocalDraftIfNeeded(variantData.postId);
 
+            if (!get().posts.some((p) => p.id === variantData.postId)) {
+                throw new Error('Post no longer exists');
+            }
+
             const variant: Variant = {
                 ...variantData,
                 id: generateId(),
@@ -282,6 +286,10 @@ export const usePostsStore = create<PostsState>((set, get) => {
             };
 
             await storage.addVariant(variant);
+            if (!get().posts.some((p) => p.id === variant.postId)) {
+                throw new Error('Post no longer exists');
+            }
+
             set((state) => ({
                 variants: [...state.variants, variant],
                 newlyCreatedDraft:

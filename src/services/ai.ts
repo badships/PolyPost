@@ -11,11 +11,10 @@ export const COMPLETION_TIMEOUT_MS = 120_000;
 
 const COMPLETION_TOKEN_LIMIT = 2048;
 const MAX_ERROR_DEPTH = 4;
-const KNOWN_ERROR_FIELDS = [
-    'error',
-    'message',
-    'detail',
+const DESCRIPTIVE_ERROR_FIELDS = [
     'error_description',
+    'detail',
+    'message',
     'title',
     'reason',
 ] as const;
@@ -36,7 +35,10 @@ const stripControlChars = (value: string): string => {
     let result = '';
     for (const ch of value) {
         const code = ch.charCodeAt(0);
-        if ((code >= 0x00 && code <= 0x1f && code !== 0x0a && code !== 0x0d) || code === 0x7f) {
+        if (
+            (code >= 0x00 && code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
+            code === 0x7f
+        ) {
             continue;
         }
         result += ch;
@@ -75,12 +77,29 @@ const extractKnownErrorText = (
     }
 
     const record = value as Record<string, unknown>;
-    for (const key of KNOWN_ERROR_FIELDS) {
+    if (typeof record.error === 'object' && record.error !== null && record.error !== value) {
+        const nestedErrorObject = extractKnownErrorText(record.error, depth + 1, seen);
+        if (nestedErrorObject) {
+            return nestedErrorObject;
+        }
+    }
+
+    for (const key of DESCRIPTIVE_ERROR_FIELDS) {
+        if (value instanceof Error && key === 'message') {
+            continue;
+        }
         if (record[key] !== undefined && record[key] !== value) {
             const nested = extractKnownErrorText(record[key], depth + 1, seen);
             if (nested) {
                 return nested;
             }
+        }
+    }
+
+    if (record.error !== undefined && record.error !== value && typeof record.error !== 'object') {
+        const nestedScalarError = extractKnownErrorText(record.error, depth + 1, seen);
+        if (nestedScalarError) {
+            return nestedScalarError;
         }
     }
 
@@ -144,14 +163,14 @@ export const sanitizeProviderErrorMessage = (
     const shortCandidates = sortedCandidates.filter((item) => item.length < 4);
 
     const redactorParts: string[] = [
-        String.raw`\b[Bb][Ee][Aa][Rr][Ee][Rr][ \t]+[^\s,;)"'}\]]+`,
+        String.raw`\b[Bb][Ee][Aa][Rr][Ee][Rr]\s+[^\s,;)"'}\]]+`,
         ...longCandidates.map(escapeRegExp),
         String.raw`\b(?:[Ss][Kk]|[Rr][Kk]|[Pp][Kk])-[A-Za-z0-9._~+/=-]{2,}`,
         ...shortCandidates.map(escapeRegExp),
     ];
     const redactor = new RegExp(redactorParts.join('|'), 'g');
     message = message.replace(redactor, (match) =>
-        /^bearer[ \t]+/i.test(match) ? 'Bearer [REDACTED]' : '[REDACTED]',
+        /^bearer\s+/i.test(match) ? 'Bearer [REDACTED]' : '[REDACTED]',
     );
 
     if (message.length > 240) {
@@ -212,6 +231,7 @@ const isValidAnthropicContentBlock = (block: unknown): boolean => {
         type?: unknown;
         text?: unknown;
         thinking?: unknown;
+        signature?: unknown;
         data?: unknown;
         id?: unknown;
         name?: unknown;
@@ -221,7 +241,7 @@ const isValidAnthropicContentBlock = (block: unknown): boolean => {
         case 'text':
             return typeof b.text === 'string';
         case 'thinking':
-            return typeof b.thinking === 'string';
+            return typeof b.thinking === 'string' && typeof b.signature === 'string';
         case 'redacted_thinking':
             return typeof b.data === 'string';
         case 'tool_use':
@@ -250,19 +270,20 @@ const isValidAnthropicProbeResponse = (data: unknown): boolean => {
     if (obj.error) {
         return false;
     }
+    if (Array.isArray(obj.content)) {
+        if (obj.type !== 'message' || obj.role !== 'assistant') {
+            return false;
+        }
+        if (obj.content.length > 0) {
+            return obj.content.every(isValidAnthropicContentBlock);
+        }
+        return obj.stop_reason === 'max_tokens';
+    }
     if (obj.type !== undefined && obj.type !== 'message') {
         return false;
     }
     if (obj.role !== undefined && obj.role !== 'assistant') {
         return false;
-    }
-    if (Array.isArray(obj.content)) {
-        if (obj.content.length > 0) {
-            return obj.content.every(isValidAnthropicContentBlock);
-        }
-        return (
-            obj.type === 'message' && obj.role === 'assistant' && obj.stop_reason === 'max_tokens'
-        );
     }
     return isValidOpenAIProbeResponse(data);
 };
@@ -527,6 +548,7 @@ export class AIService {
         const cleanKey = sanitizeApiKey(params.apiKey);
         const deadlineAt = Date.now() + COMPLETION_TIMEOUT_MS;
         const controller = new AbortController();
+        let capturedHttpError: Error | null = null;
         const timeoutId = setTimeout(() => controller.abort(), COMPLETION_TIMEOUT_MS);
         const isCustomEndpoint = isCustomApiEndpoint(params.baseURL);
         const client = new OpenAI({
@@ -535,6 +557,11 @@ export class AIService {
             fetch: createScopedFetch({
                 useProxy: isCustomEndpoint,
                 deadlineAt,
+                apiKey: params.apiKey,
+                surfaceHttpError: true,
+                onHttpError: (err) => {
+                    capturedHttpError = err;
+                },
             }),
             maxRetries: 0,
             timeout: COMPLETION_TIMEOUT_MS,
@@ -571,6 +598,13 @@ export class AIService {
             );
         } catch (error) {
             console.error('OpenAI request error:', error);
+            if (
+                !controller.signal.aborted &&
+                !(error instanceof Error && error.message === 'Request timed out') &&
+                capturedHttpError
+            ) {
+                throw capturedHttpError;
+            }
             throw new Error(params.failureMessage);
         } finally {
             clearTimeout(timeoutId);

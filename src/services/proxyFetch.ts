@@ -142,6 +142,69 @@ const sendProxyFetchCancel = (requestId: string): void => {
     }).catch(() => undefined);
 };
 
+const raceWithAbortAndDeadline = async <T>(
+    workPromise: Promise<T>,
+    options: {
+        signal?: AbortSignal;
+        deadlineAt?: number;
+        timeoutBufferMs?: number;
+        onAbort?: () => void;
+        onTimeout?: () => void;
+    },
+): Promise<T> => {
+    void workPromise.catch(() => undefined);
+
+    const { signal, deadlineAt, timeoutBufferMs = 0, onAbort, onTimeout } = options;
+    const racePromises: Promise<T>[] = [workPromise];
+    let abortListener: (() => void) | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    if (signal) {
+        racePromises.push(
+            new Promise<T>((_resolve, reject) => {
+                abortListener = () => {
+                    onAbort?.();
+                    reject(createAbortError());
+                };
+                signal.addEventListener('abort', abortListener, { once: true });
+            }),
+        );
+    }
+
+    if (deadlineAt !== undefined) {
+        const remainingMs = deadlineAt - Date.now();
+        if (remainingMs <= 0) {
+            if (abortListener && signal) {
+                signal.removeEventListener('abort', abortListener);
+            }
+            onTimeout?.();
+            throw new Error('Request timed out');
+        }
+        racePromises.push(
+            new Promise<T>((_resolve, reject) => {
+                timeoutId = setTimeout(
+                    () => {
+                        onTimeout?.();
+                        reject(new Error('Request timed out'));
+                    },
+                    Math.max(1, remainingMs + timeoutBufferMs),
+                );
+            }),
+        );
+    }
+
+    try {
+        return await Promise.race(racePromises);
+    } finally {
+        if (abortListener && signal) {
+            signal.removeEventListener('abort', abortListener);
+        }
+        if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+        }
+    }
+};
+
 export const proxyFetch = async (
     input: RequestInfo | URL,
     init?: ProxyFetchInit,
@@ -168,36 +231,20 @@ export const proxyFetch = async (
     if (init?.forceDirect || !webext?.runtime?.sendMessage) {
         const controller = new AbortController();
         let timedOut = false;
-        let timeoutId: ReturnType<typeof setTimeout> | undefined;
-        const onAbort = () => controller.abort();
 
-        if (signal) {
-            signal.addEventListener('abort', onAbort, { once: true });
-        }
-        if (deadlineAt !== undefined) {
-            const remainingMs = deadlineAt - Date.now();
-            if (remainingMs <= 0) {
-                signal?.removeEventListener('abort', onAbort);
-                throw new Error('Request timed out');
-            }
-            timeoutId = setTimeout(() => {
-                timedOut = true;
-                controller.abort();
-            }, remainingMs);
-        }
+        const {
+            timeoutMs: _ignoredTimeout,
+            deadlineAt: _ignoredDeadline,
+            forceDirect: _ignoredForceDirect,
+            redirect: _ignoredRedirect,
+            ...fetchInit
+        } = init ?? {};
+        void _ignoredTimeout;
+        void _ignoredDeadline;
+        void _ignoredForceDirect;
+        void _ignoredRedirect;
 
-        try {
-            const {
-                timeoutMs: _ignoredTimeout,
-                deadlineAt: _ignoredDeadline,
-                forceDirect: _ignoredForceDirect,
-                redirect: _ignoredRedirect,
-                ...fetchInit
-            } = init ?? {};
-            void _ignoredTimeout;
-            void _ignoredDeadline;
-            void _ignoredForceDirect;
-            void _ignoredRedirect;
+        const directWork = (async () => {
             const rawResponse = await fetch(input, {
                 ...fetchInit,
                 redirect: 'error',
@@ -213,16 +260,24 @@ export const proxyFetch = async (
                 statusText: rawResponse.statusText,
                 headers: rawResponse.headers,
             });
+        })();
+
+        try {
+            return await raceWithAbortAndDeadline(directWork, {
+                signal,
+                deadlineAt,
+                timeoutBufferMs: 0,
+                onAbort: () => controller.abort(),
+                onTimeout: () => {
+                    timedOut = true;
+                    controller.abort();
+                },
+            });
         } catch (error) {
             if (timedOut) {
                 throw new Error('Request timed out');
             }
             throw error;
-        } finally {
-            if (timeoutId !== undefined) {
-                clearTimeout(timeoutId);
-            }
-            signal?.removeEventListener('abort', onAbort);
         }
     }
 
@@ -232,70 +287,45 @@ export const proxyFetch = async (
     const headers = headersToObject(
         init?.headers ?? (input instanceof Request ? input.headers : undefined),
     );
-    const body = await readBody(input, init);
-
-    if (signal?.aborted) {
-        throw createAbortError();
-    }
-    if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
-        throw new Error('Request timed out');
-    }
 
     const requestId = createRequestId();
-    let abortListener: (() => void) | undefined;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let rpcDispatched = false;
 
-    const sendPromise = sendRuntimeMessage<ProxyFetchResponse>({
-        type: 'proxyFetch',
-        requestId,
-        url,
-        init: {
-            method,
-            headers,
-            body,
-            ...(deadlineAt !== undefined ? { deadlineAt } : {}),
-        },
+    const sendPromise = (async (): Promise<ProxyFetchResponse> => {
+        const body = await readBody(input, init);
+        if (signal?.aborted) {
+            throw createAbortError();
+        }
+        if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
+            throw new Error('Request timed out');
+        }
+        rpcDispatched = true;
+        return sendRuntimeMessage<ProxyFetchResponse>({
+            type: 'proxyFetch',
+            requestId,
+            url,
+            init: {
+                method,
+                headers,
+                body,
+                ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+            },
+        });
+    })();
+
+    const cancelIfDispatched = () => {
+        if (rpcDispatched) {
+            sendProxyFetchCancel(requestId);
+        }
+    };
+
+    const response = await raceWithAbortAndDeadline(sendPromise, {
+        signal,
+        deadlineAt,
+        timeoutBufferMs: 250,
+        onAbort: cancelIfDispatched,
+        onTimeout: cancelIfDispatched,
     });
-    void sendPromise.catch(() => undefined);
-
-    const racePromises: Promise<ProxyFetchResponse>[] = [sendPromise];
-    if (signal) {
-        racePromises.push(
-            new Promise<ProxyFetchResponse>((_resolve, reject) => {
-                abortListener = () => {
-                    sendProxyFetchCancel(requestId);
-                    reject(createAbortError());
-                };
-                signal.addEventListener('abort', abortListener, { once: true });
-            }),
-        );
-    }
-    if (deadlineAt !== undefined) {
-        const remainingMs = deadlineAt - Date.now();
-        racePromises.push(
-            new Promise<ProxyFetchResponse>((_resolve, reject) => {
-                timeoutId = setTimeout(
-                    () => {
-                        sendProxyFetchCancel(requestId);
-                        reject(new Error('Request timed out'));
-                    },
-                    Math.max(1, remainingMs + 250),
-                );
-            }),
-        );
-    }
-
-    let response: ProxyFetchResponse;
-    try {
-        response = await Promise.race(racePromises);
-    } finally {
-        if (abortListener && signal) {
-            signal.removeEventListener('abort', abortListener);
-        }
-        if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-        }
-    }
 
     if (response?.aborted) {
         throw createAbortError(response.statusText || 'Aborted');

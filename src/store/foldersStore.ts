@@ -3,7 +3,7 @@ import type { Folder } from '@/types';
 import { storage } from '@/services/storage';
 import { generateId } from '@/utils';
 import { FOLDER_COLORS } from '@/types';
-import { usePostsStore } from './postsStore';
+import { usePostsStore, nextLocalPostTimestamp } from './postsStore';
 import { useUIStore } from './uiStore';
 
 interface FoldersState {
@@ -64,13 +64,23 @@ export const useFoldersStore = create<FoldersState>((set, get) => ({
 
     deleteFolder: async (id: string) => {
         await storage.deleteFolder(id);
+        const storedPosts = await storage.getPosts();
+        const storedUpdatedAtById = new Map(storedPosts.map((p) => [p.id, p.updatedAt]));
         set((state) => ({
             folders: state.folders.filter((f) => f.id !== id),
         }));
         usePostsStore.setState((state) => ({
-            posts: state.posts.map((p) =>
-                p.folderId === id ? { ...p, folderId: null, updatedAt: Date.now() } : p,
-            ),
+            posts: state.posts.map((p) => {
+                if (p.folderId !== id) {
+                    return p;
+                }
+                const persistedUpdatedAt = storedUpdatedAtById.get(p.id) ?? 0;
+                return {
+                    ...p,
+                    folderId: null,
+                    updatedAt: Math.max(persistedUpdatedAt, nextLocalPostTimestamp(p.updatedAt)),
+                };
+            }),
         }));
         if (useUIStore.getState().selectedFolderId === id) {
             useUIStore.getState().setSelectedFolderId(null);
